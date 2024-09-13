@@ -25,37 +25,52 @@ library(stringi)
 ## Define directories, files and colors
 
 ```{r}
-work_dir <- paste0("/hpc/pmc_vanheesch/projects/Leron/",
-                   "20221122_EpitopePrediction/20221122_EpitopePrediction")
+# Work directories
+work_dir <- paste0("<work_directory>")
 raw_dir <- file.path(work_dir, "raw")
 processed_dir <- file.path(work_dir, "processed")
 plot_dir <- file.path(processed_dir, "plots")
-data_dir <- file.path(raw_dir, "Data")
 
+# Directory used for NetMHCpan binding predictions input
 net_input <- file.path(processed_dir, "netmhcpan_input")
+# Directory containg binding predictions for detected peptides
 net_output <- file.path(processed_dir, "netmhcpan_output_annotatedalleles")
-net_out_kmer <- file.path(processed_dir, "netmhcpan_allkmers9")
 
+# List of 7,264 ncORFs from doi: 10.1038/s41587-022-01369-0
 orf_file <- file.path(raw_dir, "41587_2022_1369_MOESM2_ESM.xlsx")
-peptide_file <- file.path(data_dir, "peptide_sample_msrun_counts.tsv")
-mapping_file <- file.path(data_dir, "peptide_mapping.tsv")
-seq_file <- file.path(data_dir, "Homo_sapiens.fasta")
-canonical_file <- file.path(data_dir, "Core20k.txt")
-annotation_file <- file.path(data_dir, "20231208_AnnotatedInjections.xlsx")
-atlas_stats_file <- file.path(data_dir, "HLA2023-09_experiment_summary.xlsx")
+
+# Peptide files and file mapping peptides to proteins/ncORFs from PeptideAtlas
+peptide_file <- file.path(raw_dir, "peptide_sample_msrun_counts.tsv")
+mapping_file <- file.path(raw_dir, "peptide_mapping.tsv")
+
+# File containing the sequences of proteins/ncORFs from PeptideAtlas
+seq_file <- file.path(raw_dir, "Homo_sapiens.fasta")
+
+# List of canonical CDSs from PeptideAtlas
+canonical_file <- file.path(raw_dir, "Core20k.txt")
+
+# Suplementary table S6 containing MS-runs and their annotation
+annotation_file <- file.path(raw_dir, "20231208_AnnotatedInjections.xlsx")
+
+# Experiment statistics for the HLA and nonHLA builds from PeptideAtlas
+atlas_stats_file <- file.path(raw_dir, "HLA2023-09_experiment_summary.xlsx")
 atlas_stats_nonhla_file <- 
-  file.path(data_dir, "exp_contrib_table_guest_20240130-020814-950.tsv")
+  file.path(raw_dir, "exp_contrib_table_guest_20240130-020814-950.tsv")
+
+# List of genes associated with cancer from the Cancer Gene Census
 cancer_census_file <- 
-  file.path(data_dir, "Census_allThu_Jan_4_14_08_58_2024.csv")
-nc_orf_file <- 
-  file.path(data_dir, "SuppTable2_Riboseq_matches_peptides_HLA_NEW_V2.tsv")
-table_s3_file <- file.path(data_dir, "060924_Supp_Table_S3.xlsx")
-table_s2_file <- file.path(data_dir, "20240619_Table_S1.xlsx")
-table_s5_file <- file.path(data_dir, "060924_Supp_Table_S5.xlsx")
-microprotein_file <- file.path(data_dir, "MS_for_microproteins.xlsx")
-gtf_file <- file.path("/hpc/pmc_vanheesch/shared_resources/GENOMES/",
-                      "Homo_sapiens.GRCh38/102/annotation/",
-                      "Homo_sapiens.GRCh38.102.gtf")
+  file.path(raw_dir, "Census_allThu_Jan_4_14_08_58_2024.csv")
+
+# Supplementary tables
+table_s3_file <- file.path(raw_dir, "060924_Supp_Table_S3.xlsx")
+table_s2_file <- file.path(raw_dir, "060924_Supp_Table_S2.xlsx")
+table_s5_file <- file.path(raw_dir, "060924_Supp_Table_S5.xlsx")
+
+# GTF file
+gtf_file <- file.path("Homo_sapiens.GRCh38.102.gtf")
+
+# GTEX FPKM mean expression data (excluding testis)
+gtex_fpkm_file <- file.path(raw_dir, "GTEX_FPKMmean_expression.txt")
 
 
 blue_col <- c("#6C88A5", "#7B95B3", "#8BA3C1", "#9AB1CF", "#AAC0DD", "#B9CEE9", "#C9DBF7", "#D8E9FF", "#E7F6FF", "#F5FFFF")
@@ -304,13 +319,14 @@ orf_sequences <- read_excel(orf_file, sheet=3)[
          protein_accession = paste0("CONTRIB_GENCODE_", orf_name)) %>% 
   dplyr::rename(protein = orf_sequence)
 
+gtex_data <- read.csv(gtex_fpkm_file)
+
 prot_seq_df <- read.fasta(seq_file, seqtype = "AA", as.string = T) %>% 
   enframe() %>% dplyr::rename(protein_accession = name, protein = value) %>% 
   mutate(protein = as.character(protein))
 
 can_id <- read_tsv(canonical_file, col_names = "protein_accession")
 
-microproteins <- read_excel(microprotein_file)
 
 mapping <- fread(mapping_file)
 colnames(mapping) <- c("peptide_accession", "peptide", "protein_accession", "start_loc", "end_loc", "prev_aa", "next_aa")
@@ -364,7 +380,7 @@ pep_nonc_long <- mapping[str_starts(protein_accession, "CONTRIB_GENCODE")] %>%
 
 pep_nonc <- pep_nonc_long %>% 
   inner_join(
-    read.csv(nc_orf_file, sep = "\t") %>% 
+    read_excel(table_s5_file) %>% 
       dplyr::rename(other_mappings = Other.mappings) %>% 
       distinct(identifier, sequence, other_mappings),
     c("peptide" = "sequence", "protein_accession" = "identifier")) %>% ungroup()
@@ -1044,7 +1060,7 @@ ggsave("Figure_4B.svg", device = "svg", path = plot_dir, figure_4B,
 
 ## Figure 4C - Expression
 ```{r}
-gtex_df <- read.csv(file.path(data_dir, "GTEX_FPKMmean_expression.txt")) %>% 
+gtex_df <- gtex_data %>% 
   dplyr::rename(gene_id = X) %>% pivot_longer(-gene_id) %>% 
   group_by(gene_id) %>% summarise(mean_fpkm = mean(value))
 
@@ -2300,7 +2316,7 @@ ggsave("figure_S4E.svg", device = "svg", path = plot_dir, figure_S4E,
 
 ## Figure S4F - Expression per tissue
 ```{r}
-gtex_tissue <- read.csv(file.path(data_dir, "GTEX_FPKMmean_expression.txt")) %>% 
+gtex_tissue <- gtex_data %>% 
   dplyr::rename(gene_id = X) %>% pivot_longer(-gene_id) %>% 
   dplyr::rename(tissue_raw = name, fpkm = value) %>% 
   mutate(tissue = str_replace_all(str_extract(tissue_raw, "^\\w+"), "_", " "),
@@ -2371,7 +2387,7 @@ ligand_atlas_genes <- pep_net_orf %>% ungroup() %>%
   distinct(peptide, pep_type) %>% 
   inner_join(pep_nonc, "peptide") 
 
-gtex_df <- read.csv(file.path(data_dir, "GTEX_FPKMmean_expression.txt")) %>% 
+gtex_df <- gtex_data %>% 
   dplyr::rename(gene_id = X) %>% pivot_longer(-gene_id) %>% 
   arrange(name) %>%  mutate(ligand_tissue = case_when(
     name == "Kidney.Cortex" ~ "Kidney",
