@@ -1,29 +1,21 @@
----
-title: "Annotate and analyze samples"
-output:
-  html_document:
-    toc: true
-    theme: united
----
-
 # Preprocessing
 ## Declare libraries
-
 ```{r}
-library(Peptides)
-library(data.table)
-library(seqinr)
-library(tidyverse)
-library(circlize)
-library(patchwork)
-library(readxl)
-library(ComplexHeatmap)
-library(RColorBrewer)
-library(stringi)
+suppressPackageStartupMessages({
+  library(Peptides)
+  library(data.table)
+  library(seqinr)
+  library(tidyverse)
+  library(circlize)
+  library(patchwork)
+  library(readxl)
+  library(ComplexHeatmap)
+  library(RColorBrewer)
+  library(stringi)
+})
 ```
 
 ## Define directories, files and colors
-
 ```{r}
 # Work directories
 work_dir <- paste0("<work_directory>")
@@ -31,40 +23,52 @@ raw_dir <- file.path(work_dir, "raw")
 processed_dir <- file.path(work_dir, "processed")
 plot_dir <- file.path(processed_dir, "plots")
 
-# Directory used for NetMHCpan binding predictions input
+# For running predictions yourself specify
+## Directory used for NetMHCpan binding predictions input
 net_input <- file.path(processed_dir, "netmhcpan_input")
-# Directory containg binding predictions for detected peptides
+## Directory containg binding predictions for detected peptides
 net_output <- file.path(processed_dir, "netmhcpan_output_annotatedalleles")
+# Or use data previously generated (from github)
+net_output_rds <- file.path(raw_dir, "netmhcpan.RDS")
 
 # List of 7,264 ncORFs from doi: 10.1038/s41587-022-01369-0
-orf_file <- file.path(raw_dir, "41587_2022_1369_MOESM2_ESM.xlsx")
+orf_file <- file.path(raw_dir, "ncorf_list.xlsx")
 
 # Peptide files and file mapping peptides to proteins/ncORFs from PeptideAtlas
 peptide_file <- file.path(raw_dir, "peptide_sample_msrun_counts.tsv")
+## Either needs mapping file
 mapping_file <- file.path(raw_dir, "peptide_mapping.tsv")
+## Or filtered peptides file
+filtered_peptides_file <- file.path(raw_dir, "filtered_peptides_file")
 
-# File containing the sequences of proteins/ncORFs from PeptideAtlas
+# Protein sequences
+## Either needs file containing the sequences of proteins/ncORFs from PeptideAtlas
 seq_file <- file.path(raw_dir, "Homo_sapiens.fasta")
+## Or prot_seq_df file
+can_nonc_seq_file <- file.path(raw_dir, "can_nonc_seq.RDS")
 
 # List of canonical CDSs from PeptideAtlas
 canonical_file <- file.path(raw_dir, "Core20k.txt")
 
-# Suplementary table S6 containing MS-runs and their annotation
-annotation_file <- file.path(raw_dir, "20231208_AnnotatedInjections.xlsx")
+
 
 # Experiment statistics for the HLA and nonHLA builds from PeptideAtlas
 atlas_stats_file <- file.path(raw_dir, "HLA2023-09_experiment_summary.xlsx")
 atlas_stats_nonhla_file <- 
-  file.path(raw_dir, "exp_contrib_table_guest_20240130-020814-950.tsv")
+  file.path(raw_dir, "Non-HLA2023-09_experiment_summary.tsv")
 
 # List of genes associated with cancer from the Cancer Gene Census
 cancer_census_file <- 
   file.path(raw_dir, "Census_allThu_Jan_4_14_08_58_2024.csv")
 
-# Supplementary tables
-table_s3_file <- file.path(raw_dir, "060924_Supp_Table_S3.xlsx")
+# Supplementary tables about detected peptides and ncORFs
 table_s2_file <- file.path(raw_dir, "060924_Supp_Table_S2.xlsx")
+table_s3_file <- file.path(raw_dir, "060924_Supp_Table_S3.xlsx")
+table_s4_file <- file.path(raw_dir, "060924_Supp_Table_S4.xlsx")
 table_s5_file <- file.path(raw_dir, "060924_Supp_Table_S5.xlsx")
+
+# Suplementary table S6 containing MS-runs and their annotation
+annotation_file <- file.path(raw_dir, "060924_Supp_Table_S6.xlsx")
 
 # GTF file
 gtf_file <- file.path("Homo_sapiens.GRCh38.102.gtf")
@@ -81,10 +85,10 @@ purple_col <- c("#9F85A1", "#AD92AF", "#BCAFC1", "#CBBDD0", "#D9CAE0", "#E8D7EF"
 
 red_col <- c("#B10027")
 
-
+# Standard theme set for plots
 black_theme <- theme_classic() + 
   theme(text = element_text(colour = "black"), 
-        axis.title = element_text(size=7, colour = "black"),
+        axis.title = element_text(size = 7, colour = "black"),
         axis.text = element_text(size = 7, colour = "black"),
         axis.ticks = element_line(color = "black"),
         legend.text = element_text(size = 7, colour = "black"),
@@ -108,6 +112,7 @@ remove_x <- theme(
 
 ```{r}
 get_psites <- function(p_sites, p_chr, p_start, p_end) {
+  # Extract P-sites add specified coordinates and ungroup grouped p-sites
   sel_psites <- p_sites %>% filter(chr == p_chr,start > p_start - 100,
                                   end < p_end + 100) %>% 
   mutate(diff = end - start) %>% 
@@ -121,6 +126,7 @@ get_psites <- function(p_sites, p_chr, p_start, p_end) {
 }
 
 write_net <- function(sample_num, net_data) {
+  # Write peptides to net_input folder for netMHCpan predictions
   sample_name <- paste0("/netmhcpan_input", sample_num, ".txt")
   net_data <- net_data %>% dplyr::select(peptide) %>% distinct()
   write.table(net_data, paste0(net_input, sample_name), row.names = F, 
@@ -128,6 +134,7 @@ write_net <- function(sample_num, net_data) {
 }
 
 read_netmhcpan <- function(net_path) {
+  # Read netMHCpan predictions to dataframe
   net_data <- read.delim(net_path) %>% distinct()
   rank_data <- net_data[2:nrow(net_data),
                         c(2, which(grepl("EL_Rank", net_data[1,])))]
@@ -139,6 +146,7 @@ read_netmhcpan <- function(net_path) {
 }
 
 extract_kmers <- function(string, k) {
+  # Extract all kmers of length k from string
   num_kmers <- nchar(string) - k + 1
   if (num_kmers < 1) {
     return(character(0))
@@ -149,15 +157,17 @@ extract_kmers <- function(string, k) {
 
 create_dis_plot <- function(plot_data, x_name, plot_colors, x_breaks = waiver(),
                             y_breaks = waiver(), y_name = "Density") {
-  plot_data + geom_density(alpha=.4, adjust = 1.5, linewidth=0.5) + 
+  # Create density plot using ggplot() as input                          
+  plot_data + geom_density(alpha=.4, adjust = 1.5, linewidth = 0.5) + 
     black_theme +
     scale_x_continuous(expand = c(0, 0), breaks = x_breaks, name = x_name) +
     scale_y_continuous(expand = c(0, 0), breaks = y_breaks, name = y_name) +
-    scale_color_manual(values=plot_colors) + 
+    scale_color_manual(values = plot_colors) + 
     theme(legend.position = "none")
 }
 
 get_stats <- function(df) {
+  # Get protein characteristics
   df <- df %>% mutate(len = nchar(protein),
                       hydro = hydrophobicity(protein, "KyteDoolittle"),
                       pi = pI(protein),
@@ -167,6 +177,7 @@ get_stats <- function(df) {
 
 
 perform_wtest <- function(df, cor_num, raw = F) {
+  # Perform wilcox test and optionally process result to scientific format
   w_test <- wilcox.test(y_val ~ detected, 
                         data = df %>% mutate(detected = factor(
                           detected, levels = c("Detected", "Undetected"))))
@@ -188,6 +199,7 @@ perform_wtest <- function(df, cor_num, raw = F) {
 }
 
 get_atlas_stats <- function(stat_df) {
+  # Read PeptideAtlas statistics about the number of detected peptides and proteins
   colnames(stat_df) <- colnames(stat_df) %>% str_replace_all(" |'", ".") %>% 
     str_replace_all("X[.]Spectra", "%Spectra")
   atlas_stats <- stat_df %>% 
@@ -210,26 +222,14 @@ get_atlas_stats <- function(stat_df) {
   return(atlas_stats)
 }
 
-get_aa_counts <- function(df) {
-  df <- df %>% group_by(cat) %>% 
-    summarise(seq = paste0(protein, collapse = "")) %>% 
-    rowwise() %>% 
-    mutate(aa_count = paste0(str_count(seq, aaList()), collapse = "_")) %>% 
-    select(-seq) %>% separate_rows(aa_count, sep = "_") %>% 
-    mutate(aa_count = as.integer(aa_count), aa = rep(aaList(), 2)) %>% 
-    pivot_wider(names_from = cat, values_from = aa_count) %>% 
-    mutate(cat2_sum = sum(cat2), cat1_sum = sum(cat1),
-           cat2_perc = cat2/cat2_sum*100, 
-           cat1_perc = cat1/cat1_sum*100,
-           perc_diff = cat1_perc - cat2_perc)
-}
-
 create_violin <- function(violin_data, y_label, p_val, y_lim, 
-                          n_colors = c(1:8), log = F, pseudo_log = F, x_label = "", y_breaks = waiver()) {
+                          n_colors = c(1:8), log = F, pseudo_log = F, 
+                          x_label = "", y_breaks = waiver()) {
+  # Create violin plot
   counts <- violin_data %>% dplyr::count(detected) %>% 
     mutate(n = format(n, big.mark = ",")) %>% deframe()
-  p_label <- grobTree(textGrob(p_val, x=0.5,  y=1, just = c("center", "top"),
-      gp=gpar(col="black", fontsize=7)))
+  p_label <- grobTree(textGrob(p_val, x = 0.5,  y = 1, just = c("center", "top"),
+      gp = gpar(col = "black", fontsize = 7)))
   v_colors <- c(blue_col[c(1,4)], green_col[c(1,4)], purple_col[c(1,4)], 
                 pink_col[c(1,4)])[n_colors]
   v_plot <- ggplot(violin_data, aes(order_ids, y = y_val, fill = fill_group)) +
@@ -246,7 +246,7 @@ create_violin <- function(violin_data, y_label, p_val, y_lim,
     v_plot <- v_plot + scale_y_log10(name = y_label, limits = y_lim, breaks = y_breaks)
   } else if (pseudo_log) {
     v_plot <- v_plot + scale_y_continuous(
-      trans=scales::pseudo_log_trans(base = 10),
+      trans = scales::pseudo_log_trans(base = 10),
       name = y_label, limits = y_lim, breaks = y_breaks)
   } else {
     v_plot <- v_plot + scale_y_continuous(name = y_label, limits = y_lim, breaks = y_breaks) 
@@ -255,6 +255,7 @@ create_violin <- function(violin_data, y_label, p_val, y_lim,
 }
 
 make_biotype_levels <- function(df) {
+  # Transforms the orf_biotype column in df to a factor
   df %>% 
     mutate(orf_biotype = str_replace(orf_biotype, "Processed transcript ORFs", 
                                      "Processed\ntranscript ORFs"),
@@ -264,14 +265,21 @@ make_biotype_levels <- function(df) {
                                          "Processed\ntranscript ORFs")),)
 }
 
-# Function to perform Fisher's test
+
 perform_fisher_test <- function(df) {
+  # Function to perform Fisher's test
   df$p_val <- fisher.test(df %>% select(-fc))$p.value
   return(df)
 }
 
-# Function to process data
+fisher_test_ligand_atlas <- function(a1, a2, b1, b2) {
+  # Function to perform Fisher's test using four separate inputs
+  f_test <- fisher.test(data.frame(a = c(a1,a2), b = c(b1,b2)))
+  return(f_test$p.value)
+}
+
 process_data <- function(data, filter_condition, offset_col, numerator, denominator) {
+  # Compute fold change using the fiven conditions
   data %>%
     filter({{filter_condition}}) %>%
     ungroup() %>%
@@ -280,14 +288,10 @@ process_data <- function(data, filter_condition, offset_col, numerator, denomina
     mutate(fc = !!sym(numerator) / !!sym(denominator)) 
 }
 
-fisher_test_ligand_atlas <- function(a1, a2, b1, b2) {
-  f_test <- fisher.test(data.frame(a = c(a1,a2), b = c(b1,b2)))
-  return(f_test$p.value)
-}
-
 create_histogram <- function(data, x_var, fill_color, y_label = NULL, 
                              x_label = NULL, y_limits, y_breaks = NULL, 
                              y_labels = NULL) {
+  # Create a histogram plot
   ggplot(data, aes(x = {{x_var}})) +
     geom_histogram(binwidth = 1, fill = fill_color, color = "white", 
                    linewidth = 0.2) +
@@ -303,13 +307,13 @@ create_histogram <- function(data, x_var, fill_color, y_label = NULL,
 }
 ```
 
-## Load initial files
-
+## Load initial files and data
+### Load files
 ```{r}
 # Load data
-orf_sequences <- read_excel(orf_file, sheet=3)[
+orf_sequences <- read_excel(orf_file, sheet = 3)[
   , c("orf_name", "orf_biotype", "orf_sequence", "gene_name", "gene_id", "transcript", "strand", "chrm", "starts", "ends")] %>% 
-  bind_rows(read_excel(orf_file, sheet=4)[
+  bind_rows(read_excel(orf_file, sheet = 4)[
     , c("orf_name", "orf_biotype", "orf_sequence", "gene_name", "gene_id", "transcript", "strand", "chrm", "starts", "ends")]) %>% 
   mutate(orf_sequence = str_replace(orf_sequence, "[*]", ""),
          orf_biotype = ifelse(orf_biotype == "processed_transcript", "Processed transcript ORF", 
@@ -321,15 +325,7 @@ orf_sequences <- read_excel(orf_file, sheet=3)[
 
 gtex_data <- read.csv(gtex_fpkm_file)
 
-prot_seq_df <- read.fasta(seq_file, seqtype = "AA", as.string = T) %>% 
-  enframe() %>% dplyr::rename(protein_accession = name, protein = value) %>% 
-  mutate(protein = as.character(protein))
-
 can_id <- read_tsv(canonical_file, col_names = "protein_accession")
-
-
-mapping <- fread(mapping_file)
-colnames(mapping) <- c("peptide_accession", "peptide", "protein_accession", "start_loc", "end_loc", "prev_aa", "next_aa")
 
 annotations <- read_excel(annotation_file) %>% 
   rename(dataset_id = dataset, ms_name = ms_run_name, hla_class = HLA_class) %>% 
@@ -345,22 +341,45 @@ colnames(peptide) <- c("peptide", "sam_id", "count", "dataset_id",
                        "sample_tag", "ms_name")
 
 table_s2 <- read_excel(table_s2_file) %>% 
-  mutate(orf_name = str_replace(identifier, "CONTRIB_GENCODE_", ""))
+  dplyr::rename(identifier = "PeptideAtlas identifier",
+                orf_name = "Ribo-Seq_ORF")
 table_s3 <- read_excel(table_s3_file) %>% 
   dplyr::rename(identifier = "PeptideAtlas.identifier",
                 orf_name = "Ribo-Seq_ORF",
                 initial_tier = "Initial.tier.for.level.of.evidence.prior.to.manual.inspection",
                 final_tier = "Final.tier.for.level.of.evidence")
+table_s4 <- read_excel(table_s4_file) %>% 
+  dplyr::rename(identifier = "PeptideAtlas.identifier",
+                orf_name = "Ribo-Seq_ORF")
 table_s5 <- read_excel(table_s5_file) %>% 
   dplyr::rename(identifier = "PeptideAtlas.identifier",
                 orf_name = "Ribo-Seq_ORF",
                 initial_tier = "Initial.tier.for.level.of.evidence.prior.to.manual.inspection",
                 final_tier = "Final.tier.for.level.of.evidence") %>% rename_all(~ make.names(.))
+```
 
-# Filter data
+### Load protein sequences
+#### Either use PeptideAtlas fasta file
+```{r}
+prot_seq_df <- read.fasta(seq_file, seqtype = "AA", as.string = T) %>% 
+  enframe() %>% dplyr::rename(protein_accession = name, protein = value) %>% 
+  mutate(protein = as.character(protein))
+
 can_nonc_seq <- prot_seq_df %>% semi_join(can_id, "protein_accession") %>% 
   bind_rows(prot_seq_df %>% 
               filter(str_starts(protein_accession, "CONTRIB_GENCODE_c")))
+```
+
+#### Or use pre-generated file (from github)
+```{r}
+can_nonc_seq <- readRDS(can_nonc_seq_file)
+```
+
+### Filter canonical and non-canonical peptides
+#### Use mapping file from PeptideAtlas
+```{r}
+mapping <- fread(mapping_file)
+colnames(mapping) <- c("peptide_accession", "peptide", "protein_accession", "start_loc", "end_loc", "prev_aa", "next_aa")
 
 can_peptides <- mapping %>% inner_join(can_id, "protein_accession") %>% distinct(peptide)
 
@@ -378,21 +397,28 @@ pep_nonc_long <- mapping[str_starts(protein_accession, "CONTRIB_GENCODE")] %>%
   inner_join(orf_sequences, "protein_accession") %>% 
   mutate(pep_len = nchar(peptide)) %>% filter(pep_len >= 8) %>% ungroup()
 
+pep_can <- mapping %>% 
+  semi_join(can_peptides, "peptide") %>% group_by(peptide) %>% 
+  mutate(n_pep = n(), pep_len = nchar(peptide)) %>% 
+  filter(n_pep <= 30, pep_len >= 8)
+
+```
+#### Or use earlier generated data (from Github)
+```{r}
+load(filtered_peptides_file)
+```
+### Prepare initial data frames for analysis
+```{r}
+
 pep_nonc <- pep_nonc_long %>% 
-  inner_join(
-    read_excel(table_s5_file) %>% 
-      dplyr::rename(other_mappings = Other.mappings) %>% 
-      distinct(identifier, sequence, other_mappings),
-    c("peptide" = "sequence", "protein_accession" = "identifier")) %>% ungroup()
+  inner_join(table_s4 %>% dplyr::rename(other_mappings = "Other.mappings"),
+    c("peptide" =  "sequence", "protein_accession" = "identifier")) %>% ungroup()
 
 # Filter canonical peptides
 setDT(mapping)
 setDT(can_peptides)
 
-pep_can <- mapping  %>% 
-  semi_join(can_peptides, "peptide") %>% group_by(peptide) %>% 
-  mutate(n_pep = n(), pep_len = nchar(peptide)) %>% 
-  filter(n_pep <= 30, pep_len >= 8)
+
 
 seq_stats <- can_nonc_seq %>% filter(!str_detect(protein, "U")) %>% 
   mutate(pro_cat = ifelse(str_starts(protein_accession, "CONTRIB_GENCODE_"),
@@ -451,9 +477,8 @@ setDT(hla_df)
 hla_df <- hla_df[pep_can_nonc_hladf, on = 'peptide']
 ```
 
-
-# NetMHCpan predictions
 # Merge P-sites and save for Riboseq visualization (only once)
+
 ```{r}
 bw_files <- list.files(path = file.path(raw_dir, "20240705_Gwisp_bw"), 
   pattern = paste0(".bedgraph"), full.names = TRUE)
@@ -474,9 +499,9 @@ saveRDS(ribo_psites, file.path(raw_dir, "ribo_psites.Rds"))
 saveRDS(hht_psites, file.path(raw_dir, "hht_psites.Rds"))
 ```
 
+# NetMHCpan predictions - All peptides
 
-## All peptides
-### Prepare input for HLA predictions
+## Prepare input for HLA predictions
 
 ```{R}
 netmhcpan_input <- pep_net_orf %>% distinct(peptide, hla_type) %>% 
@@ -496,12 +521,20 @@ write.table(names(netmhcpan_input_s), paste0(net_input, "/net_alleles.txt"),
 # Run NetMHCpan
 ```
 
-### Read prediction results
-
+## Process prediction results
+### Load netMHCpan data
+#### Read from prediction files
 ```{r}
 net_files <- list.files(path = net_output, 
   pattern = paste0("net_.*.xls"), full.names = TRUE)
 netmhcpan <- lapply(net_files, read_netmhcpan) %>% bind_rows() 
+```
+#### Or use earlier generated data (from Github)
+```{r}
+netmhcpan <- readRDS(net_output_rds)
+```
+
+```{r}
 setDT(hla_df)
 setDT(netmhcpan)
 
@@ -521,9 +554,8 @@ pep_net_orf <- peptide_net %>%
 n_dataset <- pep_net_orf %>% ungroup() %>% distinct(dataset_id) %>% nrow()
 ```
 
-
-
 # Figure 2 - nonHLA figures
+
 ```{r}
 nonhla_count <- table_s2 %>% select(-orf_biotype) %>% 
   inner_join(orf_sequences %>% select(orf_name, orf_biotype), "orf_name") %>% 
@@ -557,7 +589,7 @@ figure_2A <- ggplot() +
   scale_x_discrete(name = element_blank(), expand = c(0,0)) +
   scale_y_continuous(name = "Number of peptides", expand = c(0,0)) +
   scale_fill_manual(values = blue_col[3]) + 
-  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
 
 figure_2B1 <- ggplot() +
   geom_bar(data = nonhla_count %>% filter(name != "n_pep"), 
@@ -569,7 +601,7 @@ figure_2B1 <- ggplot() +
                     labels = c("Multiple peptide detections",
                                "Single peptide detections"),
                     name = element_blank()) +
-  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
 
 figure_2B2 <- ggplot() +
   geom_bar(data = nonhla_count_group, 
@@ -578,33 +610,33 @@ figure_2B2 <- ggplot() +
   scale_x_discrete(name = element_blank(), expand = c(0,0)) +
   scale_y_continuous(name = "Number of ncORFs", expand = c(0,0)) +
   scale_fill_manual(values = green_col[c(6,1)]) +
-  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
         axis.ticks.x = element_blank())
 
-figure_2C1 <- ggplot(val_count, aes(x="", y=n_orf_2, fill=label)) +
-  geom_bar(stat="identity", width=1, color="white") +
-  coord_polar("y", start=0, direction = 1) + 
+figure_2C1 <- ggplot(val_count, aes(x = "", y = n_orf_2, fill = label)) +
+  geom_bar(stat = "identity", width = 1, color = "white") +
+  coord_polar("y", start = 0, direction = 1) + 
   theme_void() +
   theme(legend.text = element_text(size = 7, colour = "black")) +
-  geom_text(aes(y = ypos2, label = n_orf_2), color = "black", size=7/.pt) +
+  geom_text(aes(y = ypos2, label = n_orf_2), color = "black", size = 7/.pt) +
   scale_fill_manual(values = c(pink_col[4], green_col[4]), 
                     name = element_blank(), 
                     labels = c("Insufficient\nevidence",
                                "Passing\ninspection"))
 
-figure_2C2 <- ggplot(val_count, aes(x="", y=n_orf_1, fill=label)) +
-  geom_bar(stat="identity", width=1, color="white") +
-  coord_polar("y", start=0, direction = 1) + 
+figure_2C2 <- ggplot(val_count, aes(x = "", y = n_orf_1, fill = label)) +
+  geom_bar(stat = "identity", width = 1, color = "white") +
+  coord_polar("y", start = 0, direction = 1) + 
   theme_void() +
   theme(legend.text = element_text(size = 7, colour = "black")) +
-  geom_text(aes(y = ypos1, label = n_orf_1), color = "black", size=7/.pt) +
+  geom_text(aes(y = ypos1, label = n_orf_1), color = "black", size = 7/.pt) +
   scale_fill_manual(values = c(pink_col[4], green_col[4]), 
                     name = element_blank(), 
                     labels = c("Insufficient\nevidence",
                                "Passing\ninspection"))
 
-figure_2D <- ggplot(nonhla_pep_count, aes(y=n, x=n_pep)) + 
-  geom_bar(position="stack", stat="identity", show.legend = F, 
+figure_2D <- ggplot(nonhla_pep_count, aes(y = n, x = n_pep)) + 
+  geom_bar(position = "stack", stat = "identity", show.legend = F, 
            fill = green_col[4]) + black_theme +
   scale_x_discrete(name = "Number of distinct peptides", expand = c(0,0)) +
   scale_y_continuous(name = "Number of non-canonical ORFs", expand = c(0,0)) +
@@ -617,10 +649,10 @@ ggsave("Figure_2.svg", device = "svg", path = plot_dir, figure_2,
        width = 2600, height = 900, units = "px")
 ```
 
-
-
 # Figure 3 - HLA figures
-## Figure 3A-D -  Compare orf categories
+
+## Figure 3A-D - Compare orf categories
+
 ```{r}
 orf_pep_stats <- pep_nonc %>% rowwise() %>% 
   mutate(cov = paste0(start_loc:end_loc, collapse = ",")) %>% 
@@ -657,8 +689,8 @@ figure_3A <- ggplot(orf_pep_stats_count,
   black_theme + 
   scale_x_discrete(name = element_blank(), expand = c(0,0)) +
   scale_y_continuous(name = "Number of detections", expand = c(0,0)) +
-  scale_fill_manual(values=green_col[c(6,1)]) +
-  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+  scale_fill_manual(values = green_col[c(6,1)]) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
 
 figure_3B <- ggplot(orf_pep_stats %>% dplyr::count(n_pep) %>% 
                       filter(n_pep > 0), aes(y = n, x = n_pep)) + 
@@ -686,7 +718,7 @@ figure_3C <-
                      labels = c("Detected by single peptide", "Detected by multiple peptides"))
 
 figure_3D <- ggplot(orf_quality, aes(y = n, x = study, fill = is_sufficient)) + 
-  geom_bar(position ="stack", stat = "identity", show.legend = F) + 
+  geom_bar(position  = "stack", stat = "identity", show.legend = F) + 
   black_theme + 
   scale_x_discrete(name = "Number of studies\nin which ncORF\nwas detected", 
                    expand = c(0,0)) +
@@ -731,8 +763,8 @@ peplen_plot_data <- pep_net_orf %>%
   arrange(n_non_can_perc) %>% filter(avg_len < 20)
 
 figure_3E1 <- 
-  ggplot(peplen_plot_data,aes(x=avg_len, y=perc, color = n_non_can_perc_lim)) + 
-  geom_point(aes(size=pep_count), stroke = 0) + black_theme +
+  ggplot(peplen_plot_data,aes(x = avg_len, y = perc, color = n_non_can_perc_lim)) + 
+  geom_point(aes(size = pep_count), stroke = 0) + black_theme +
   scale_color_gradient(name = "% non-can\npeptides",
                       low = grey_col[1], high = red_col,
                       limits = c(0, 3),
@@ -751,8 +783,8 @@ figure_3E1 <-
   geom_vline(xintercept = 12, linetype = "dashed")
 
 figure_3E2 <- ggplot(peplen_plot_data %>% filter(orf_count > 0), 
-                          aes(x=avg_len, y=perc, color = n_non_can_perc_lim)) + 
-  geom_point(aes(size=orf_count), stroke = 0) + 
+                          aes(x = avg_len, y = perc, color = n_non_can_perc_lim)) + 
+  geom_point(aes(size = orf_count), stroke = 0) + 
   black_theme + 
   theme(legend.direction = "vertical", legend.box = "horizontal") +
   scale_color_gradient(name = "% non-can\npeptides",
@@ -787,8 +819,8 @@ bind_cmp_plot_data <- pep_net_orf %>%
   arrange(n_non_can_perc)
   
 figure_3F <- ggplot(bind_cmp_plot_data %>% filter(!is.nan(perc_non_can)),
-                        aes(x=perc_can, y=perc_non_can, color = n_non_can_perc)) + 
-  geom_point(aes(size=total_non_can), stroke = 0) + 
+                        aes(x = perc_can, y = perc_non_can, color = n_non_can_perc)) + 
+  geom_point(aes(size = total_non_can), stroke = 0) + 
   black_theme +
   scale_color_gradient(name = "% non-can\npeptides",
                       low = grey_col[1], high = red_col,
@@ -806,6 +838,7 @@ ggsave("Figure_3EF.svg", device = "svg", path = plot_dir, figure_3EF,
 ```
 
 ## Figure 3G - Heatmap
+
 ```{r}
 # Heatmap colors
 ht_colors <- colorRamp2(breaks = c(-1, 0, 2,2.000001, 100),
@@ -927,14 +960,15 @@ figure_3G <- Heatmap(ht_mtr_tis, show_row_names = F,
         height = nrow(ht_mtr_tis)*unit(0.030, "mm"),
         width = ncol(ht_mtr_tis)*unit(0.3, "mm"))
 
-svg(file=file.path(plot_dir, "Figure_3G.svg"))
+svg(file = file.path(plot_dir, "Figure_3G.svg"))
 draw(figure_3G, annotation_legend_side = "bottom", newpage = F)
 dev.off()
 ```
 
-
 # Figure 4 - Detection determinants
+
 ## Figure 4A - Undetected vs detected
+
 ```{r}
 seq_stats_properties <- seq_stats %>% dplyr::rename(full_len = len) %>% 
   mutate(to_duplicate = ifelse(pro_cat != "Canonical", 3, 1)) %>% 
@@ -1009,8 +1043,8 @@ ggsave("Figure_4A.svg", device = "svg", path = plot_dir, figure_4A,
        width = 1250, height = 1750, units = "px")
 ```
 
-
 ## Figure 4B - Hydrophobicity end of sequence
+
 ```{r}
 seq_stats_hydro <- seq_stats %>% 
   mutate(protein = stri_reverse(protein),
@@ -1057,8 +1091,8 @@ ggsave("Figure_4B.svg", device = "svg", path = plot_dir, figure_4B,
        width = 1250, height = 1250, units = "px")
 ```
 
-
 ## Figure 4C - Expression
+
 ```{r}
 gtex_df <- gtex_data %>% 
   dplyr::rename(gene_id = X) %>% pivot_longer(-gene_id) %>% 
@@ -1088,11 +1122,11 @@ ggsave("Figure_4C.svg", device = "svg", path = plot_dir, figure_4C,
        width = 625, height = 600, units = "px")
 ```
 
-
 ## Figure 4D - Peptide location
+
 ```{r}
 pep_pos_can <- pep_can %>% inner_join(can_id, "protein_accession") %>% 
-  inner_join(prot_seq_df, "protein_accession") %>% 
+  inner_join(can_nonc_seq, "protein_accession") %>% 
   semi_join(peptide_hla %>% filter(hla_class == "I"), "peptide") %>% 
   distinct(protein, peptide, start_loc, end_loc) %>% 
   mutate(len = nchar(protein),
@@ -1154,6 +1188,7 @@ ggsave("Figure_4D.svg", device = "svg", path = plot_dir, figure_4D,
 ```
 
 ## Figure 4E - Ligand Atlas
+
 ```{r}
 ligand_atlas_data <-  pep_net_orf %>% ungroup() %>% 
   filter(dataset_id == "PXD019643", is_binding, pep_type != "other") %>% 
@@ -1207,7 +1242,7 @@ figure_4D3 <- ggplot(ligand_atlas_data,
                      name = "% ncORF peptides") +
   scale_fill_manual(values = c(green_col[4], red_col), name = element_blank(),
                     labels = c("", "Significant\nenrichment")) +
-  theme(axis.text.x = element_text(angle = 60,  hjust=1)) +
+  theme(axis.text.x = element_text(angle = 60,  hjust = 1)) +
   geom_hline(yintercept = sum(ligand_atlas_data$ncORF)/
                (sum(ligand_atlas_data$ncORF)+sum(ligand_atlas_data$CDS))*100, 
              linetype = "dashed")
@@ -1217,8 +1252,11 @@ figure_4E <- figure_4E1 / figure_4E2 / figure_4E3
 ggsave("Figure_4E.svg", device = "svg", path = plot_dir, figure_4E,
         width = 1544, height = 1375, units = "px")
 ```
+
 # Figure 5 - Tiers
+
 ## Figure 5B - Tier assignment
+
 ```{r}
 tiers <- table_s3 %>% select(orf_name, initial_tier, final_tier) %>% 
   bind_rows(table_s5 %>% select(orf_name, initial_tier, final_tier)) %>% 
@@ -1266,6 +1304,7 @@ ggsave("Figure_5B.svg", device = "svg", path = plot_dir, figure_5B,
 ```
 
 ## Figure 5C - Tier 1A breakdown
+
 ```{r}
 data_5c <- tiers %>% filter(initial_tier == "Tier 1A") %>% 
   mutate(final_tier = ifelse(is.na(final_tier) | final_tier == "Tier 3",
@@ -1276,8 +1315,8 @@ data_5c <- tiers %>% filter(initial_tier == "Tier 1A") %>%
   dplyr::count(final_tier)
   
 figure_5c <- ggplot(data_5c, aes(x = "", y = n, fill = final_tier)) +
-  geom_bar(stat="identity", width=1, color="white", show.legend = F) +
-  coord_polar("y", start=0, direction = 1) + 
+  geom_bar(stat = "identity", width = 1, color = "white", show.legend = F) +
+  coord_polar("y", start = 0, direction = 1) + 
   theme_void() +
   scale_fill_manual(values = c("#B9B1A4", "#C8C1B7","#D8D3CC" ,pink_col[4], 
                                green_col[4]))
@@ -1286,15 +1325,15 @@ ggsave("Figure_5c.svg", device = "svg", path = plot_dir, figure_5c,
        width = 900, height = 900, units = "px")
 ```
 
-
 # Figure 6 - ORF examples
+
 ## Figure 6A - nonHLA c11riboseqorf4
 
 ```{r}
 b_w <- 0.7
 orf_id <- "CONTRIB_GENCODE_c11riboseqorf4"
 
-orf_seq <- prot_seq_df %>% 
+orf_seq <- can_nonc_seq %>% 
   filter(str_detect(protein_accession, "^CONTRIB_GENCODE_c11riboseqorf4$")) %>% 
   pull(protein)
 
@@ -1329,9 +1368,11 @@ ggsave("Figure_6A.svg", device = "svg", path = plot_dir, figure_6A,
 ```
 
 ## Figure 6B - HLA c17norep146
+
 ### Create c17norep146 kmers
+
 ```{r}
-seq_17_146 <- prot_seq_df %>% 
+seq_17_146 <- can_nonc_seq %>% 
   filter(protein_accession == "CONTRIB_GENCODE_c17norep146") %>% 
   pull(protein)
 
@@ -1340,6 +1381,7 @@ seq_17_146_kmer_df<- sapply(8:12, function(i) extract_kmers(seq_17_146, i)) %>%
 ```
 
 ### Run NetMHCpan (only once)
+
 ```{r}
 unique_kmers <- seq_17_146_kmer_df %>% distinct(kmer) %>% rename("peptide" = 1)
 write_net("", unique_kmers)
@@ -1356,14 +1398,22 @@ write.table(found_alleles$hla_type, paste0(net_input, "/net_alleles.txt"),
 # Run NetMHCpan
 ```
 
-### Create Figure 6B
+### Read NetMHCpan results
+#### Either read prediction results
 ```{r}
 # Read and process netmhcpan files
 net_c17_146 <- list.files(path = file.path(processed_dir, 
                                           "netmhcpan_kmers_c7norep146"), 
                          pattern = "net_.*.xls", full.names = TRUE) %>%
   map_df(read_netmhcpan)
+```
+#### Or use pre-generated data (from github)
+```{r}
+net_c17_146 <- readRDS(file.path(raw_dir, net_c17_146.RDS)
+```
 
+### Create Figure 6B
+```{r}
 # Process alleles
 alleles_17_146 <- pep_nonc %>% 
   filter(protein_accession == "CONTRIB_GENCODE_c17norep146") %>% 
@@ -1453,7 +1503,7 @@ seq_17_146_detected_df %>% inner_join(seq_17_146_kmer_df_rank_all,
 plot_17_146_pred <- ggplot() +
   geom_rect(data = rectangles,
             aes(xmin = min, xmax = max, ymin = 1-b_w, 
-                ymax = max(kmer_17_146_p_data$y_max), group=x_group), 
+                ymax = max(kmer_17_146_p_data$y_max), group = x_group), 
             alpha = 0.2, fill = brewer.pal(5, "Set1")[3]) +
   geom_rect(data = kmer_17_146_p_data,
             aes(xmin = kmer_start, xmax = kmer_end, ymin = y_min, 
@@ -1500,10 +1550,10 @@ figure_6B <- plot_17_146_shape / plot_17_146_pred / plot_17_146_det
 
 ggsave("Figure_6B.svg", device = "svg", path = plot_dir, figure_6B, 
        width = 2200, height = 1000, units = "px")
-```  
-
+```
 
 # Figure S1 - Atlas statistics numbers
+
 ```{r}
 atlas_stats_hla <- read_excel(atlas_stats_file) %>% get_atlas_stats() 
 atlas_stats_nonhla <- read_delim(atlas_stats_nonhla_file, delim = "\t") %>% 
@@ -1521,8 +1571,8 @@ create_atlas_plot <- function(plot_data, y_name, y_breaks, y_labels,
                               y_lim = NA) {
   count_label <- paste0(format(max(plot_data$value), big.mark = ","), 
                                " ", str_extract(y_name, "\\w+$"))
-  c_label <- grobTree(textGrob(count_label, x=0.5,  y=1, just = c("center", "top"),
-      gp=gpar(col="black", fontsize=9)))
+  c_label <- grobTree(textGrob(count_label, x = 0.5,  y = 1, just = c("center", "top"),
+      gp = gpar(col = "black", fontsize = 9)))
   atlas_plot <- ggplot() +
     geom_ribbon(data = plot_data, 
                 aes(x = spectra_searched, ymin = 0, ymax = value, 
@@ -1566,12 +1616,12 @@ figure_S1 <- (p_hla_pep + p_nonhla_pep) / (p_hla_pro + p_nonhla_pro)
 
 ggsave("Figure_S1AD.svg", device = "svg", path = plot_dir, figure_S1AD, 
        width = 2300, height = 1278, units = "px")
-```			
+```
 
 # Supplementary 2 - HLA class and ncORF peptide origin
 
-
 ## Figure S2A - Peptide classification
+
 ```{r}
 barplot_data <- peptide_hla %>% group_by(peptide) %>% 
   mutate(hla_class = ifelse(n_distinct(hla_class) > 1, "Both", hla_class)) %>% 
@@ -1624,7 +1674,7 @@ barplot_sums <- barplot_data_cat %>% distinct(cat, pep_type, sums) %>%
 p_overview_1 <- ggplot() +
   geom_bar(data = barplot_data_cat %>% filter(cat == 1 | cat == 2),
            aes(x = cat, y = perc, fill = fill_color, group = group),
-           stat="identity") + black_theme +
+           stat = "identity") + black_theme +
   scale_fill_identity() + 
   scale_y_continuous(expand = c(0,0), name = element_blank()) +
   scale_x_discrete(name = element_blank(), 
@@ -1640,7 +1690,7 @@ p_overview_2a <- ggplot() +
   geom_bar(data = barplot_data_cat %>% filter((cat == 3 | cat == 4 | cat == 5), 
                                               pep_type == "canonical"),
            aes(x = cat, y = value, fill = fill_color, group = group),
-           stat="identity") + black_theme +
+           stat = "identity") + black_theme +
   scale_fill_identity() +
   scale_y_continuous(name = element_blank(), expand = c(0,0)) +
   scale_x_discrete(name = element_blank(), expand = c(0,0),
@@ -1657,7 +1707,7 @@ p_overview_2b <- ggplot() +
   geom_bar(data = barplot_data_cat %>% filter((cat == 3 | cat == 4 | cat == 5), 
                                               pep_type == "noncanonical"),
            aes(x = cat, y = value, fill = fill_color, group = group),
-           stat="identity") + black_theme +
+           stat = "identity") + black_theme +
   scale_fill_identity() +
   scale_y_continuous(name = element_blank(), expand = c(0,0)) +
   scale_x_discrete(name = element_blank(), expand = c(0,0),
@@ -1680,7 +1730,9 @@ figure_S2A <- p_overview_1 + p_overview_2a +
 ggsave("Figure_S2A.svg", device = "svg", path = plot_dir, figure_S2A,
        width = 2000, height = 1300, units = "px")
 ```
+
 ## Figure S2B - Classification on protein/ORF level
+
 ```{r}
 pep_pro <- bind_rows(pep_can %>% semi_join(can_id, "protein_accession") %>% 
                        distinct(peptide, protein_accession),
@@ -1723,7 +1775,9 @@ figure_S2B2 <- ggplot(protein_hla %>% filter(!is_can),
 
 figure_S2B <- figure_S2B1 + figure_S2B2
 ```
+
 ## Figure S2C - Classification by peptide length
+
 ```{r}
 pep_hla <- peptide %>% inner_join(annotations, c("dataset_id", "ms_name")) %>% 
   distinct(peptide, hla_class) %>% group_by(peptide) %>% 
@@ -1746,7 +1800,9 @@ figure_S2C <- ggplot(pep_class, aes(hla_class, perc, group = pep_len, fill = pep
   scale_fill_manual(values = blue_col[c(6, 2)], name = "Peptide length") +
   facet_wrap(~pep_type)
 ```
+
 ## Figure S2D - Graph length distribution per dataset
+
 ```{r}
 peptide_lendis <- peptide_hla %>% group_by(hla_class, dataset_id) %>% 
   mutate(p_count = n(), p_len = nchar(peptide)) %>% 
@@ -1758,10 +1814,10 @@ peptide_lendis <- peptide_hla %>% group_by(hla_class, dataset_id) %>%
 lendis_n <- peptide_lendis %>% distinct(dataset_id, hla_class) %>% ungroup() %>% 
   dplyr::count(hla_class) %>% deframe()
 
-figure_S2D <- ggplot(data=peptide_lendis %>% filter(p_len <= 30), 
-       aes(x=p_len, y=len_count_f, group=dataset_hla, 
+figure_S2D <- ggplot(data = peptide_lendis %>% filter(p_len <= 30), 
+       aes(x = p_len, y = len_count_f, group = dataset_hla, 
                                 color = hla_class)) +
-  geom_line(linewidth=0.25) + geom_point(size=0.5) + black_theme + 
+  geom_line(linewidth = 0.25) + geom_point(size = 0.5) + black_theme + 
   scale_y_continuous(expand = c(0, 0), limits = c(0,0.8), 
                      name = "Relative occurence") + 
   scale_x_continuous(expand = c(0, 0), limits = c(6.80,30), 
@@ -1774,6 +1830,7 @@ figure_S2D <- ggplot(data=peptide_lendis %>% filter(p_len <= 30),
 ```
 
 ## Figure S2E - Compare HLA I vs II
+
 ```{r}
 orf_hlaclass <- peptide_hla %>%
   inner_join(pep_nonc, "peptide", relationship = "many-to-many") %>%
@@ -1795,7 +1852,7 @@ hla_n <- orf_hlaclass_count %>% dplyr::count(hla_class, wt = n) %>% deframe()
 
 figure_S2E <- 
   ggplot(orf_hlaclass_count, aes(y = orf_biotype, x = n_adj, fill = hla_class)) + 
-  geom_bar(stat="identity", position="identity", show.legend = F) + 
+  geom_bar(stat = "identity", position = "identity", show.legend = F) + 
   black_theme +
   scale_x_continuous(position = "top", 
                      breaks = c(-1250,-1000,-750, -500, -250, 0, 20*class_scale, 
@@ -1804,13 +1861,14 @@ figure_S2E <-
                      limits = c(-1250, 1250),
                      expand = c(0,0),
                      name = "# peptides of ORF biotype detected") + 
-  scale_fill_manual(values=c(blue_col[1], grey_col[5]), 
+  scale_fill_manual(values = c(blue_col[1], grey_col[5]), 
                     labels = c(paste0("HLA-I (n=", hla_n["I"], " peptides)"),
                                paste0("HLA-II (n=", hla_n["II"], " peptides)"))) +
   theme(axis.line.y = element_blank(), axis.ticks.y = element_blank())
 ```
 
 ## Figure S2F - Check HLA-II peptides
+
 ```{r}
 dataset_class <- annotations %>% distinct(dataset_id, hla_class) %>% 
   group_by(dataset_id) %>% 
@@ -1865,7 +1923,7 @@ detection_count <- hlaii_orf_peptides_count %>%
 
 figure_S2F <- ggplot(hlaii_orf_peptides_count, 
                       aes(y = peptide, x = n, fill = color)) + 
-  geom_bar(stat="identity", show.legend = F) + black_theme +
+  geom_bar(stat = "identity", show.legend = F) + black_theme +
   scale_fill_manual(breaks = hla_color_mapping$color, 
                     values = hla_color_mapping$color_hex) +
   geom_vline(aes(xintercept = 0)) +
@@ -1883,6 +1941,7 @@ figure_S2F <- ggplot(hlaii_orf_peptides_count,
 ```
 
 ## Figure S2B-F - Combine
+
 ```{r}
 figure_S2BF <- figure_S2B + figure_S2C + figure_S2D + figure_S2E + free(figure_S2F)  + 
   plot_layout(design = "ABFFF\nCCFFF\nDDFFF\nEEFFF", 
@@ -1895,6 +1954,7 @@ ggsave("figure_S2BF.svg", device = "svg", path = plot_dir, figure_S2BF,
 # Figure S3 - ORF statistics
 
 ## Figure S3A-D - ORF overview
+
 ```{r}
 biotype_counts <- orf_pep_stats %>% mutate(detected = n_pep >= 1) %>% 
   dplyr::count(orf_biotype, detected) %>% 
@@ -1906,8 +1966,8 @@ biotype_counts <- orf_pep_stats %>% mutate(detected = n_pep >= 1) %>%
 
 orf_pep_stats_len <- orf_pep_stats %>% 
   mutate(is_det = ifelse(n_pep > 0, T, F)) %>% 
-  mutate(len_cat = cut(orf_len, breaks=c(15, 30, 50, 75, 100, Inf), 
-                       labels=c("16-30","31-50","51-75","76-100",">100"))) %>% 
+  mutate(len_cat = cut(orf_len, breaks = c(15, 30, 50, 75, 100, Inf), 
+                       labels = c("16-30","31-50","51-75","76-100",">100"))) %>% 
   dplyr::count(len_cat, is_det) %>% group_by(len_cat) %>% 
   mutate(total = sum(n)) %>% ungroup() %>% rowwise() %>% 
   mutate(perc = n/total, conf_low = binom.test(n,total)$conf.int[1],
@@ -1931,40 +1991,40 @@ orf_len_enrichment <- orf_pep_stats_len %>% filter(is_det) %>%
   pivot_wider(names_from = cat, values_from = perc) %>% 
   mutate(enrichment = (high - low)/high)
 
-figure_S3A <- ggplot(orf_pep_stats_ref, aes(fill=is_det, y=n, x=orf_biotype)) + 
-  geom_bar(position="stack", stat="identity", show.legend = F) + black_theme + 
+figure_S3A <- ggplot(orf_pep_stats_ref, aes(fill = is_det, y = n, x = orf_biotype)) + 
+  geom_bar(position = "stack", stat = "identity", show.legend = F) + black_theme + 
   scale_x_discrete(name = element_blank(), expand = c(0,0)) +
   scale_y_continuous(name = "Number of non-canonical ORFs", expand = c(0,0)) +
-  scale_fill_manual(values=green_col[c(4,1)]) +
-  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+  scale_fill_manual(values = green_col[c(4,1)]) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
 
 figure_S3B <- ggplot(orf_pep_stats_ref, 
-                     aes(fill=is_det, y=perc, x=orf_biotype)) + 
-  geom_bar(position="stack", stat="identity", show.legend = F) + black_theme +
+                     aes(fill = is_det, y = perc, x = orf_biotype)) + 
+  geom_bar(position = "stack", stat = "identity", show.legend = F) + black_theme +
   scale_x_discrete(name = element_blank(), expand = c(0,0)) +
   scale_y_continuous(name = "Percentage of non-canonical ORFs", 
                      expand = c(0,0), breaks = c(0, 0.25, 0.5, 0.75, 1),
                      labels = c("0%", "25%", "50%", "75%", "100%")) +
-  scale_fill_manual(values=green_col[c(4,1)]) +
+  scale_fill_manual(values = green_col[c(4,1)]) +
   geom_linerange(aes(ymin = conf_low, ymax=  conf_high)) +
-  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
 
-figure_S3C <- ggplot(orf_pep_stats_len, aes(fill=is_det, y=n, x=len_cat)) + 
-  geom_bar(position="stack", stat="identity", show.legend = F) + black_theme + 
+figure_S3C <- ggplot(orf_pep_stats_len, aes(fill = is_det, y = n, x = len_cat)) + 
+  geom_bar(position = "stack", stat = "identity", show.legend = F) + black_theme + 
   scale_x_discrete(name = "Orf length (aa)", expand = c(0,0)) +
   scale_y_continuous(name = "Number of non-canonical ORFs", expand = c(0,0)) +
-  scale_fill_manual(values=green_col[c(4,1)]) +
-  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+  scale_fill_manual(values = green_col[c(4,1)]) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
 
-figure_S3D <- ggplot(orf_pep_stats_len, aes(fill=is_det, y=perc, x=len_cat)) + 
-  geom_bar(position="stack", stat="identity", show.legend = F) + black_theme +
+figure_S3D <- ggplot(orf_pep_stats_len, aes(fill = is_det, y = perc, x = len_cat)) + 
+  geom_bar(position = "stack", stat = "identity", show.legend = F) + black_theme +
   scale_x_discrete(name = "Orf length (aa)", expand = c(0,0)) +
   scale_y_continuous(name = "Percentage of non-canonical ORFs", expand = c(0,0),
                      breaks = c(0, 0.25, 0.5, 0.75, 1),
                      labels = c("0%", "25%", "50%", "75%", "100%")) +
-  scale_fill_manual(values=green_col[c(4,1)]) +
+  scale_fill_manual(values = green_col[c(4,1)]) +
   geom_linerange(aes(ymin = conf_low, ymax=  conf_high)) +
-  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
 
 figure_S3 <- figure_S3A + figure_S3B + figure_S3C + figure_S3D +
   plot_layout(nrow = 1)
@@ -1973,9 +2033,8 @@ ggsave("Figure_S3AD.svg", device = "svg", path = plot_dir, figure_S3,
        width = 2340, height = 1000, units = "px")
 ```
 
-
-
 ## Figure S3E - Compare cancer vs non-cancer with cancer genes
+
 ```{r}
 cancer_census <- read_csv(cancer_census_file)
 colnames(cancer_census) <- str_replace_all(colnames(cancer_census), " ", "_")
@@ -2033,7 +2092,7 @@ cancer_colors <- c(blue_col[2], grey_col[4], blue_col[6])
 
 figure_S3E <- 
   ggplot(orf_cancer_count, aes(x = x_axis, y = perc, fill = color)) + 
-  geom_bar(stat="identity", position="stack") +
+  geom_bar(stat = "identity", position = "stack") +
   scale_fill_identity(guide = "legend", breaks = c(cancer_colors, red_col),
                       labels = c(paste0("Cancer\n(n = ", 
                                         cancer_counts["Cancer"], " peptides)"), 
@@ -2052,9 +2111,9 @@ figure_S3E <-
   scale_x_discrete(expand = c(0, 0), name = element_blank(),
                    breaks = cancer_x_labels$x_axis, 
                    labels = cancer_x_labels$orf_biotype) +
-  facet_grid( ~ orf_biotype , scales="free") +
+  facet_grid( ~ orf_biotype , scales = "free") +
   geom_linerange(aes(ymin = conf_low, ymax=  conf_high)) +
-     theme(axis.text.x = element_text(angle = 60,  hjust=1),
+     theme(axis.text.x = element_text(angle = 60,  hjust = 1),
            strip.text.x = element_blank())
 
 ggsave("Figure_S3E.svg", device = "svg", path = plot_dir, figure_S3E,
@@ -2062,6 +2121,7 @@ ggsave("Figure_S3E.svg", device = "svg", path = plot_dir, figure_S3E,
 ```
 
 ## Figure S3F - Compare on peptide level
+
 ```{r}
 neworf_cancer <- orf_cancer %>% distinct(peptide, is_cancer) %>% 
   mutate(len = nchar(peptide),
@@ -2074,20 +2134,20 @@ neworf_cancer <- orf_cancer %>% distinct(peptide, is_cancer) %>%
                             levels = c("Cancer", "Both", "Non-cancer")))
 
 len_dist_can <- create_dis_plot(ggplot(neworf_cancer, 
-                                       aes(x=len, color = is_cancer)), 
+                                       aes(x = len, color = is_cancer)), 
                 "Peptide length", cancer_colors)
 
 hydro_dist_can <- create_dis_plot(ggplot(neworf_cancer, 
-                                     aes(x=hydro, color = is_cancer)), 
+                                     aes(x = hydro, color = is_cancer)), 
                 "Hydrophobicity (Kyte-Doolittle)", cancer_colors)
 
 weight_dist_can <- create_dis_plot(ggplot(neworf_cancer, 
-                                      aes(x=weight, color = is_cancer)), 
+                                      aes(x = weight, color = is_cancer)), 
                 "Mean mass per amino acid (u)", cancer_colors, 
                 y_name = element_blank())
 
 pi_dist_can <- create_dis_plot(ggplot(neworf_cancer, 
-                                      aes(x=pi, color = is_cancer)), 
+                                      aes(x = pi, color = is_cancer)), 
                 "Isoelectric point", cancer_colors, y_name = element_blank())
 
 figure_S3F <- wrap_plots(list(len_dist_can, weight_dist_can, 
@@ -2099,11 +2159,14 @@ ggsave("Figure_S3F.svg", device = "svg", path = plot_dir, figure_S3F,
 ```
 
 # Figure S4 - Binding predictions
+
 ## Figure S4AB - 9mers per hla-typing
+
 ### Extract 9mers from non-canonical ORFs
+
 ```{r}
 k <- 9
-nonc_seq <- prot_seq_df %>% 
+nonc_seq <- can_nonc_seq %>% 
               filter(str_starts(protein_accession, "CONTRIB_GENCODE_c"))
 
 k_mers_nonc <- apply(nonc_seq, 1, function(x) extract_kmers(x["protein"], k))
@@ -2121,8 +2184,8 @@ kmer_df_nonc <- k_mers_nonc %>% unlist() %>% enframe() %>%
   replace_na(list(kmer_detected = F, orf_detected = F))
 ```
 
-
 ### Run NetMHCpan and process data (only once)
+
 ```{r}
 nonc_kmers <- kmer_df_nonc %>% distinct(kmer) %>% rename("peptide" = 1)
 
@@ -2148,6 +2211,7 @@ save(net_files, nonc_kmers, file = file.path(processed_dir, "retrieve_net_kmers_
 ```
 
 ### Create figure S4A
+
 ```{r}
 net_kmers_nonc <- readRDS(file.path(processed_dir, "net_kmers_nonc.Rds"))
 
@@ -2169,9 +2233,9 @@ ms_alleles <- hla_df %>% distinct(peptide, hla_typing, hla_type) %>%
 
 min_rank_det_pval <- perform_wtest(ms_alleles %>% 
                                      dplyr::rename(y_val = min_rank), 1)
-p_label_min_rank_det <- grobTree(textGrob(min_rank_det_pval, x=0.5,  
-                                          y=1, just = c("center", "top"),
-  gp=gpar(col="black", fontsize=7)))
+p_label_min_rank_det <- grobTree(textGrob(min_rank_det_pval, x = 0.5,  
+                                          y = 1, just = c("center", "top"),
+  gp = gpar(col = "black", fontsize = 7)))
 
 figure_S4A <- ggplot(ms_alleles, 
                          aes(kmer_hla_detected, y = min_rank, 
@@ -2181,14 +2245,15 @@ figure_S4A <- ggplot(ms_alleles,
   scale_fill_manual(values = green_col[c(2,5)]) +
   scale_x_discrete(name = element_blank(), breaks = c(T,F),
                    labels = c("Detected\n9mers", "Undetected\n9mers")) +
-  scale_y_continuous(trans=scales::pseudo_log_trans(base = 10), limits = c(0,100),
+  scale_y_continuous(trans = scales::pseudo_log_trans(base = 10), limits = c(0,100),
                      breaks = c(0, 2, 25, 50, 75, 100),
                      name = "Minimum rank of 9mer\nfrom detected ncORFs\nper HLA-typing") +
-  geom_hline(yintercept =2, linetype = "dashed") + 
+  geom_hline(yintercept = 2, linetype = "dashed") + 
   annotation_custom(p_label_min_rank_det)
 ```
 
 ### Create figure S4B
+
 ```{r}
 nonc_alleles <- hla_df %>% semi_join(pep_nonc, "peptide") %>% 
   distinct(hla_type)
@@ -2208,8 +2273,8 @@ nonc_kmer_all_allele_perc <- kmer_df_nonc %>%
 
 perc_rank_orf_pval <- perform_wtest(nonc_kmer_all_allele_perc %>% 
                                      dplyr::rename(y_val = perc), 1)
-p_label_perc_rank_orf <- grobTree(textGrob(perc_rank_orf_pval, x=0.5,  y=1, just = c("center", "top"),
-  gp=gpar(col="black", fontsize=7)))
+p_label_perc_rank_orf <- grobTree(textGrob(perc_rank_orf_pval, x = 0.5,  y = 1, 
+  just = c("center", "top"), gp = gpar(col = "black", fontsize = 7)))
 
 figure_S4B <- ggplot(nonc_kmer_all_allele_perc, 
        aes(orf_detected, y = perc, fill = orf_detected)) +
@@ -2228,6 +2293,7 @@ figure_S4B <- ggplot(nonc_kmer_all_allele_perc,
 ```
 
 ### Figure S4A-B - Combine
+
 ```{r}
 figure_S4AB <- figure_S4A + figure_S4B
 
@@ -2235,7 +2301,7 @@ ggsave("Figure_S4AB.svg", device = "svg", path = plot_dir, figure_S3,
        width = 1100, height = 1000, units = "px")
 ```
 
-## Figure S4C - Hydrophobicity 
+## Figure S4C - Hydrophobicity
 
 ```{r}
 h_lab <- "Hydrophobicity\n(Kyte-Doolittle)"
@@ -2256,7 +2322,9 @@ figure_S4C <- wrap_plots(figure_S4C_plots, ncol = 2)
 ggsave("Figure_4A.svg", device = "svg", path = plot_dir, figure_4A, 
        width = 1100, height = 800, units = "px")
 ```
+
 ## Figure S4D - Hydrophobicity per biotype
+
 ```{r}
 seq_stats_hydro_biotype <- seq_stats_hydro %>% 
   group_by(orf_biotype, c_offset, detected) %>% 
@@ -2289,6 +2357,7 @@ ggsave("figure_S4D.svg", device = "svg", path = plot_dir, figure_S4D,
 ```
 
 ## Figure S4E - Expression per biotype
+
 ```{r}
 orf_gtex_split <- orf_gtex %>% make_biotype_levels %>% split(~orf_biotype)
 
@@ -2315,6 +2384,7 @@ ggsave("figure_S4E.svg", device = "svg", path = plot_dir, figure_S4E,
 ```
 
 ## Figure S4F - Expression per tissue
+
 ```{r}
 gtex_tissue <- gtex_data %>% 
   dplyr::rename(gene_id = X) %>% pivot_longer(-gene_id) %>% 
@@ -2344,7 +2414,7 @@ max(p_tissue)
 
 figure_S4F <- ggplot(orf_gtex_tissue, aes(detected, fpkm, color = detected)) +
   geom_boxplot(outliers = F) + black_theme +
-  scale_y_continuous(trans=scales::pseudo_log_trans(base = 10), 
+  scale_y_continuous(trans = scales::pseudo_log_trans(base = 10), 
                      breaks = c(0, 2, 10, 50, 250),
                      name = "Mean FPKM of gene\nexpressing ncORF in GTEx") +
   scale_x_discrete(labels = c(), name = element_blank()) + 
@@ -2356,11 +2426,12 @@ ggsave("Figure_S4F.svg", device = "svg", path = plot_dir, figure_S4F,
 ```
 
 ## Figure S4G - Ligand Atlas quality
+
 ```{r}
 figure_S4G <- ggplot(peplen_plot_data %>% filter(dataset_id == "PXD019643") %>% 
                        arrange(orf_count), 
-                     aes(x=avg_len, y=perc, color = orf_count)) + 
-  geom_point(aes(size=pep_count), stroke = 0) + black_theme + 
+                     aes(x = avg_len, y = perc, color = orf_count)) + 
+  geom_point(aes(size = pep_count), stroke = 0) + black_theme + 
   theme(legend.direction = "vertical", legend.box = "horizontal") +
   scale_color_gradient(name = "# non-can\npeptides",
                       low = grey_col[1], high = red_col,
@@ -2380,7 +2451,9 @@ figure_S4G <- ggplot(peplen_plot_data %>% filter(dataset_id == "PXD019643") %>%
 ggsave("figure_S4G.svg", device = "svg", path = plot_dir, figure_S4G, 
        width = 1237.205, height = 600, units = "px")
 ```
+
 ## Figure S4H - LigandAtlas - GTEX comparison
+
 ```{r}
 ligand_atlas_genes <- pep_net_orf %>% ungroup() %>% 
   filter(dataset_id == "PXD019643", is_binding, pep_type == "noncanonical") %>% 
@@ -2440,17 +2513,18 @@ gtex_df <- gtex_data %>%
   scale_y_continuous(expand = c(0,0),
                      name = "Mean TPM of gene") +
   scale_fill_manual(values = green_col[4]) +
-  theme(axis.text.x = element_text(angle = 60,  hjust=1))
+  theme(axis.text.x = element_text(angle = 60,  hjust = 1))
 
 ggsave("Figure_S4F.svg", device = "svg", path = plot_dir, figure_S4H,
         width = 1300, height = 800, units = "px")
 ```
 
-
 # Figure S5 - HLA c5norep142
+
 ## Create c5norep142 kmers
+
 ```{r}
-seq_5_142 <- prot_seq_df %>% 
+seq_5_142 <- can_nonc_seq %>% 
   filter(protein_accession == "CONTRIB_GENCODE_c5norep142") %>% 
   pull(protein)
 
@@ -2459,6 +2533,7 @@ seq_5_142_kmer_df<- sapply(8:12, function(i) extract_kmers(seq_5_142, i)) %>%
 ```
 
 ## Run NetMHCpan (only once)
+
 ```{r}
 unique_kmers <- seq_5_142_kmer_df %>% distinct(kmer) %>% rename("peptide" = 1)
 write_net("", unique_kmers)
@@ -2474,14 +2549,22 @@ write.table(found_alleles$hla_type, paste0(net_input, "/net_alleles.txt"),
 
 # Run NetMHCpan
 ```
-
-## Create Figure S6
+## Read NetMHCpan results
+### Either read prediction results
 ```{r}
 # Read and process netmhcpan files
 net_c5_142 <- list.files(path = file.path(processed_dir, 
                                           "netmhcpan_kmers_c5norep142"), 
                          pattern = "net_.*.xls", full.names = TRUE) %>%
   map_df(read_netmhcpan)
+```
+### Or use pre-generated data (from github)
+```{r}
+net_c5_142 <- readRDS(file.path(raw_dir, net_c5_142.RDS)
+```
+
+## Create Figure S6
+```{r}
 
 # Process alleles
 alleles_5_142 <- pep_nonc %>% 
@@ -2560,7 +2643,7 @@ seq_5_142_detected_df %>% inner_join(kmer_5_142_p_data,
 plot_5_142_pred <- ggplot() +
   geom_rect(data = rectangles,
             aes(xmin = min, xmax = max, ymin = 1-b_w, 
-                ymax = max(kmer_5_142_p_data$y_max), group=x_group), 
+                ymax = max(kmer_5_142_p_data$y_max), group = x_group), 
             alpha = 0.2, fill = brewer.pal(5, "Set1")[3]) +
   geom_rect(data = kmer_5_142_p_data,
             aes(xmin = kmer_start, xmax = kmer_end, ymin = y_min, 
@@ -2607,10 +2690,10 @@ figure_S5 <- plot_5_142_shape / plot_5_142_pred / plot_5_142_det
 
 ggsave("Figure_S5.svg", device = "svg", path = plot_dir, figure_S5, 
        width = 2200, height = 1000, units = "px")
-```  
-
+```
 
 # Figures 6 & S5 - Riboseq data
+
 ```{r}
 ribo_psites <- readRDS(file.path(raw_dir, "ribo_psites.Rds"))
 hht_psites <- readRDS(file.path(raw_dir, "hht_psites.Rds"))
@@ -2755,5 +2838,3 @@ sapply(ORFs_q %>% distinct(orf_name) %>% pull(orf_name), function(i) {
   return(i)
 })
 ```
-
-
