@@ -503,7 +503,7 @@ saveRDS(hht_psites, file.path(raw_dir, "hht_psites.Rds"))
 
 ## Prepare input for HLA predictions
 
-```{R}
+```{r}
 netmhcpan_input <- pep_net_orf %>% distinct(peptide, hla_type) %>% 
   rename("allele" = 2) %>% mutate(
   allele = paste0("HLA-", str_extract(allele, "^[A-Z]\\d\\d"), ":", 
@@ -1409,7 +1409,7 @@ net_c17_146 <- list.files(path = file.path(processed_dir,
 ```
 #### Or use pre-generated data (from github)
 ```{r}
-net_c17_146 <- readRDS(file.path(raw_dir, net_c17_146.RDS)
+net_c17_146 <- readRDS(file.path(raw_dir, net_c17_146.RDS))
 ```
 
 ### Create Figure 6B
@@ -2560,7 +2560,7 @@ net_c5_142 <- list.files(path = file.path(processed_dir,
 ```
 ### Or use pre-generated data (from github)
 ```{r}
-net_c5_142 <- readRDS(file.path(raw_dir, net_c5_142.RDS)
+net_c5_142 <- readRDS(file.path(raw_dir, net_c5_142.RDS))
 ```
 
 ## Create Figure S6
