@@ -26,7 +26,7 @@ plot_dir <- file.path(processed_dir, "plots")
 # For running predictions yourself specify
 ## Directory used for NetMHCpan binding predictions input
 net_input <- file.path(processed_dir, "netmhcpan_input")
-## Directory containg binding predictions for detected peptides
+## Directory containing binding predictions for detected peptides
 net_output <- file.path(processed_dir, "netmhcpan_output_annotatedalleles")
 # Or use data previously generated (from github)
 net_output_rds <- file.path(raw_dir, "netmhcpan.RDS")
