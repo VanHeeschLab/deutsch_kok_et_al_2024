@@ -39,7 +39,7 @@ peptide_file <- file.path(raw_dir, "peptide_sample_msrun_counts.tsv")
 ## Either needs mapping file
 mapping_file <- file.path(raw_dir, "peptide_mapping.tsv")
 ## Or filtered peptides file
-filtered_peptides_file <- file.path(raw_dir, "filtered_peptides_file")
+filtered_peptides_file <- file.path(raw_dir, "filtered_peptides.Rdata")
 
 # Protein sequences
 ## Either needs file containing the sequences of proteins/ncORFs from
@@ -519,16 +519,13 @@ load(filtered_peptides_file)
 ```{r}
 pep_nonc <- pep_nonc_long %>%
   inner_join(
-    table_s4 %>% dplyr::rename(other_mappings = "Other.mappings"),
+    table_s4 %>% 
+      select(-c(orf_name, transcript, starts, ends, orf_biotype, gene_name,
+                gene_id, strand, chrm)) %>% 
+               dplyr::rename(other_mappings = "Other.mappings"),
     c("peptide" = "sequence", "protein_accession" = "identifier")
   ) %>%
   ungroup()
-
-# Filter canonical peptides
-setDT(mapping)
-setDT(can_peptides)
-
-
 
 seq_stats <- can_nonc_seq %>%
   filter(!str_detect(protein, "U")) %>%
