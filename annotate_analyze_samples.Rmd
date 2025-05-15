@@ -698,7 +698,7 @@ netmhcpan <- lapply(net_files, read_netmhcpan) %>% bind_rows()
 ```{r}
 netmhcpan <- readRDS(net_output_rds)
 ```
-
+### Prepare data frames for analysis
 ```{r}
 setDT(hla_df)
 setDT(netmhcpan)
