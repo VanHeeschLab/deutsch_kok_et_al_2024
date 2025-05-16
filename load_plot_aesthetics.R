@@ -15,3 +15,15 @@ green_col <- c("#7D905D", "#8D9E6C", "#9DA97B", "#ADB58A", "#BCC19A", "#CBDCA9",
 purple_col <- c("#9F85A1", "#AD92AF", "#BCAFC1", "#CBBDD0", "#D9CAE0", "#E8D7EF", "#F6E5FF", "#FFF2FF", "#FFFFFE", "#FFFFFF")
 
 red_col <- c("#B10027")
+
+remove_y <- theme(
+  axis.text.y = element_blank(),
+  axis.ticks.y = element_blank(),
+  axis.title.y = element_blank()
+)
+
+remove_x <- theme(
+  axis.text.x = element_blank(),
+  axis.ticks.x = element_blank(),
+  axis.title.x = element_blank()
+)

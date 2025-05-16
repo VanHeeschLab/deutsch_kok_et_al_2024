@@ -332,6 +332,7 @@ create_histogram <- function(data, x_var, fill_color, y_label = NULL,
 ```{r}
 source("load_tables.R")
 source("load_peptideatlas_data.R")
+source("load_plot_aesthetics.R")
 ```
 
 # Merge P-sites and save for Riboseq visualization (only once)

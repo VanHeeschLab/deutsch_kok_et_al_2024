@@ -7,6 +7,7 @@ library(patchwork)
 # Load data
 ```{r}
 source("load_tables.R")
+source("load_plot_aesthetics.R")
 ```
 
 # Figure 2 - nonHLA figures
