@@ -31,27 +31,6 @@ net_output <- file.path(processed_dir, "netmhcpan_output_annotatedalleles")
 # Or use data previously generated (from github)
 net_output_rds <- file.path(raw_dir, "netmhcpan.RDS")
 
-# List of 7,264 ncORFs from doi: 10.1038/s41587-022-01369-0
-orf_file <- file.path(raw_dir, "ncorf_list.xlsx")
-
-# Peptide files and file mapping peptides to proteins/ncORFs from PeptideAtlas
-peptide_file <- file.path(raw_dir, "peptide_sample_msrun_counts.tsv")
-## Either needs mapping file
-mapping_file <- file.path(raw_dir, "peptide_mapping.tsv")
-## Or filtered peptides file
-filtered_peptides_file <- file.path(raw_dir, "filtered_peptides.Rdata")
-
-# Protein sequences
-## Either needs file containing the sequences of proteins/ncORFs from
-##  PeptideAtlas
-seq_file <- file.path(raw_dir, "Homo_sapiens.fasta")
-## Or prot_seq_df file
-can_nonc_seq_file <- file.path(raw_dir, "can_nonc_seq.RDS")
-
-# List of canonical CDSs from PeptideAtlas
-canonical_file <- file.path(raw_dir, "Core20k.txt")
-
-
 
 # Experiment statistics for the HLA and nonHLA builds from PeptideAtlas
 atlas_stats_file <- file.path(raw_dir, "HLA2023-09_experiment_summary.xlsx")
@@ -61,15 +40,6 @@ atlas_stats_nonhla_file <-
 # List of genes associated with cancer from the Cancer Gene Census
 cancer_census_file <-
   file.path(raw_dir, "Census_allThu_Jan_4_14_08_58_2024.csv")
-
-# Supplementary tables about detected peptides and ncORFs
-table_s2_file <- file.path(raw_dir, "060924_Supp_Table_S2.xlsx")
-table_s3_file <- file.path(raw_dir, "060924_Supp_Table_S3.xlsx")
-table_s4_file <- file.path(raw_dir, "060924_Supp_Table_S4.xlsx")
-table_s5_file <- file.path(raw_dir, "060924_Supp_Table_S5.xlsx")
-
-# Suplementary table S6 containing MS-runs and their annotation
-annotation_file <- file.path(raw_dir, "060924_Supp_Table_S6.xlsx")
 
 # GTF file
 gtf_file <- file.path("Homo_sapiens.GRCh38.102.gtf")
@@ -376,6 +346,7 @@ create_histogram <- function(data, x_var, fill_color, y_label = NULL,
 ```
 # Load initial data
 ```{r}
+source("load_tables.R")
 source("load_peptideatlas_data.R")
 ```
 
