@@ -5,6 +5,26 @@ library(readxl)
 library(here)
 
 #-------------------------------------------------------------------------------
+# Define general function
+make_biotype_levels <- function(df) {
+  # Transforms the orf_biotype column in df to a factor
+  df %>%
+    mutate(
+      orf_biotype = str_replace(
+        orf_biotype, "Processed transcript ORFs",
+        "Processed\ntranscript ORFs"
+      ),
+      orf_biotype = factor(orf_biotype,
+                           levels = c(
+                             "uORFs", "uoORFs", "intORFs", "doORFs",
+                             "dORFs", "lncRNA ORFs",
+                             "Processed\ntranscript ORFs"
+                           )
+      ),
+    )
+}
+
+#-------------------------------------------------------------------------------
 # Define required file locations
 here::i_am("load_peptideatlas_data.R")
 
