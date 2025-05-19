@@ -36,8 +36,8 @@ orf_file <- file.path(raw_dir, "ncorf_list.xlsx")
 # Supplementary tables about detected peptides and ncORFs
 table_s2_file <- file.path(raw_dir, "060924_Supp_Table_S2.xlsx")
 table_s3_file <- file.path(raw_dir, "060924_Supp_Table_S3.xlsx")
-table_s4_file <- file.path(raw_dir, "060924_Supp_Table_S4.xlsx")
-table_s5_file <- file.path(raw_dir, "060924_Supp_Table_S5.xlsx")
+table_s4_file <- file.path(raw_dir, "190525_Supp_Table_S4.xlsx")
+table_s5_file <- file.path(raw_dir, "190525_Supp_Table_S5.xlsx")
 
 # Suplementary table S6 containing MS-runs and their annotation
 annotation_file <- file.path(raw_dir, "060924_Supp_Table_S6.xlsx")
