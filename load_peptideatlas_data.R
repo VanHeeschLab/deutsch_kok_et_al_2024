@@ -115,32 +115,6 @@ pep_nonc <- pep_nonc_long %>%
   ) %>%
   ungroup()
 
-seq_stats <- can_nonc_seq %>%
-  filter(!str_detect(protein, "U")) %>%
-  mutate(
-    pro_cat = ifelse(str_starts(protein_accession, "CONTRIB_GENCODE_"),
-                     "Non-canonical", "Canonical"
-    ),
-    len = nchar(protein)
-  ) %>%
-  filter(len >= 16) %>%
-  left_join(
-    bind_rows(
-      pep_can %>%
-        ungroup() %>%
-        distinct(protein_accession) %>%
-        semi_join(can_id, "protein_accession"),
-      pep_nonc_long %>% distinct(protein_accession)
-    ) %>%
-      mutate(detected = "Detected"), "protein_accession"
-  ) %>%
-  left_join(
-    orf_sequences %>% distinct(protein_accession, orf_biotype),
-    "protein_accession"
-  ) %>%
-  replace_na(list(detected = "Undetected", orf_biotype = "CDS"))
-
-
 # Combine peptides and annotation, filter for HLA-I
 peptide_hla <- peptide %>%
   inner_join(annotations, c("ms_name", "dataset_id"))
