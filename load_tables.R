@@ -23,13 +23,12 @@ make_biotype_levels <- function(df) {
         orf_biotype, "Processed transcript ORFs",
         "Processed\ntranscript ORFs"
       ),
-      orf_biotype = factor(orf_biotype,
-                           levels = c(
-                             "uORFs", "uoORFs", "intORFs", "doORFs",
-                             "dORFs", "lncRNA ORFs",
-                             "Processed\ntranscript ORFs"
-                           )
-      ),
+      orf_biotype =
+        factor(orf_biotype, levels = c(
+          "uORFs", "uoORFs", "intORFs", "doORFs",
+          "dORFs", "lncRNA ORFs",
+          "Processed\ntranscript ORFs"
+        )),
     )
 }
 
@@ -52,22 +51,26 @@ table_s5_file <- file.path(raw_dir, "190525_Supp_Table_S5.xlsx")
 annotation_file <- file.path(raw_dir, "060924_Supp_Table_S6.xlsx")
 
 #-------------------------------------------------------------------------------
-#Load tables
+# Load tables
 
 # Data of 7,624 ncORFs
 orf_sequences <- read_excel(orf_file, sheet = 3)[
-  , c("orf_name", "orf_biotype", "orf_sequence", "gene_name", "gene_id",
-      "transcript", "strand", "chrm", "starts", "ends")
+  , c(
+    "orf_name", "orf_biotype", "orf_sequence", "gene_name", "gene_id",
+    "transcript", "strand", "chrm", "starts", "ends"
+  )
 ] %>%
   bind_rows(read_excel(orf_file, sheet = 4)[
-    , c("orf_name", "orf_biotype", "orf_sequence", "gene_name", "gene_id",
-        "transcript", "strand", "chrm", "starts", "ends")
+    , c(
+      "orf_name", "orf_biotype", "orf_sequence", "gene_name", "gene_id",
+      "transcript", "strand", "chrm", "starts", "ends"
+    )
   ]) %>%
   mutate(
     orf_sequence = str_replace(orf_sequence, "[*]", ""),
     orf_biotype = ifelse(orf_biotype == "processed_transcript",
-                         "Processed transcript ORF",
-                         orf_biotype
+      "Processed transcript ORF",
+      orf_biotype
     ),
     orf_biotype = ifelse(orf_biotype == "lncRNA", "lncRNA ORF", orf_biotype),
     orf_biotype = str_replace(orf_biotype, "ORF", "ORFs"),
@@ -85,7 +88,7 @@ annotations <- read_excel(annotation_file) %>%
     ),
     is_cellline = ifelse(str_detect(
       sample_category,
-      regex("Cell Line", ignore_case = T)
+      regex("Cell Line", ignore_case = TRUE)
     ),
     "cell line", "non-cell line"
     ),
