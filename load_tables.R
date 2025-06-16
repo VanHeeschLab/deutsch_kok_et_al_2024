@@ -1,3 +1,6 @@
+# Author: Leron Kok
+# This scripts loads the supplementary tables needed for the analyses
+
 #-------------------------------------------------------------------------------
 # Load libraries
 library(tidyverse)
@@ -5,9 +8,15 @@ library(readxl)
 library(here)
 
 #-------------------------------------------------------------------------------
-# Define general function
+# Define general functions
 make_biotype_levels <- function(df) {
   # Transforms the orf_biotype column in df to a factor
+  #
+  # Args:
+  #   df: dataframe which contains at least the column orf_biotype
+  #
+  # Returns:
+  #   The input dataframe with orf_biotype as a factor
   df %>%
     mutate(
       orf_biotype = str_replace(
@@ -44,6 +53,8 @@ annotation_file <- file.path(raw_dir, "060924_Supp_Table_S6.xlsx")
 
 #-------------------------------------------------------------------------------
 #Load tables
+
+# Data of 7,624 ncORFs
 orf_sequences <- read_excel(orf_file, sheet = 3)[
   , c("orf_name", "orf_biotype", "orf_sequence", "gene_name", "gene_id",
       "transcript", "strand", "chrm", "starts", "ends")
@@ -64,6 +75,7 @@ orf_sequences <- read_excel(orf_file, sheet = 3)[
   ) %>%
   dplyr::rename(protein = orf_sequence)
 
+# Annoation data of the MS-runs
 annotations <- read_excel(annotation_file) %>%
   rename(dataset_id = dataset, ms_name = ms_run_name, hla_class = HLA_class) %>%
   mutate(
@@ -80,6 +92,7 @@ annotations <- read_excel(annotation_file) %>%
     sample_type = paste0(is_cancer, "_", is_cellline)
   )
 
+# Supplementary tables S2-5
 table_s2 <- read_excel(table_s2_file) %>%
   dplyr::rename(
     identifier = "PeptideAtlas identifier",
