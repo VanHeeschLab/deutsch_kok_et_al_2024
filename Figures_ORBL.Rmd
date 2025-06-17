@@ -1,0 +1,394 @@
+---
+title: "Script to create figures related to ORBL"
+output: html_document
+author: "Leron Kok"
+---
+
+# Pre-processing
+## Declare libraries
+```{r}
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(here)
+  library(readxl)
+  library(rcartocolor)
+  library(scales)
+  library(patchwork)
+  library(ggpubr)
+  library(gghalves)
+})
+```
+
+## Load required data and define directories and files
+```{r}
+utils::globalVariables(c("biotype", "score", "cum", "n90", ".", "perc"))
+source("load_tables.R")
+source("load_plot_aesthetics.R")
+
+processed_dir <- here("processed")
+plot_dir <- file.path(processed_dir, "plots")
+
+# Matched ncORF scores for c1norep308
+orbl_ref_file <- file.path(raw_dir, "ORBLvOfMatchedORFs.c1norep308.txt")
+
+# ORBLv scores (placental and primate) of Mane CDS and ncORFs
+orblv_placental_file <- file.path(raw_dir, "RiboVsManeOrblv.placental.tsv")
+orblv_primate_file <- file.path(raw_dir, "RiboVsManeOrblv.primate.tsv")
+# ORBLq scores (placental and primate) of ncORFs
+orblq_placental_file <- file.path(raw_dir, "RiboSeqORFs.ORBLq.placental.tsv")
+orblq_primate_file <- file.path(raw_dir, "RiboSeqORFs.ORBLq.primate.tsv")
+
+# ORBLv and ORBLq data for ncORFs
+orbl_ncorf_file <- file.path(raw_dir, "Ribo-Seq_ORF_ORBL.2025-06-03.txt")
+```
+
+## Define functions
+```{r}
+read_orbl_data <- function(filename) {
+  # Read ORBLv and ORBLq data from TSV files
+  #
+  # Args:
+  #   filename: string with the filename of the data to be read
+  #
+  # Returns:
+  #   Dataframe containing the biotype, score and the cumulative rank
+  read_tsv(filename, show_col_types = FALSE) %>%
+    dplyr::rename(biotype = 1, score = 2) %>%
+    # Merge CDS 100-250 codons and >250 codons together
+    mutate(biotype = ifelse(str_detect(biotype, "250"), "CDS, >100 codons",
+      biotype
+    )) %>%
+    arrange(score) %>%
+    group_by(biotype) %>%
+    mutate(
+      cum = row_number() / max(row_number()),
+      biotype = str_replace(biotype, "-", " ") %>%
+        str_replace("mixed", "Mixed") %>%
+        str_replace("<= ", "≤") %>%
+        factor(orf_order)
+    )
+}
+
+process_orblq_data <- function(df) {
+  # Process ORBLq data to add cumulative distribution per biotype
+  #
+  # Args:
+  #   df: dataframe with ORBLq score and biotype
+  #
+  # Returns:
+  #   Dataframe with biotype and score column, and cumulative distribution (cum)
+  df %>%
+    filter(!is.na(score)) %>%
+    group_by(biotype) %>%
+    arrange(score) %>%
+    mutate(cum = row_number() / max(row_number())) %>%
+    ungroup()
+}
+
+make_orbl_plot <- function(plot_data, x_name, col, add = NULL,
+                           show_legend = FALSE) {
+  # Create line plot based on the ORBLv or ORBLq data
+  #
+  # Args:
+  #   plot_data: dataframe with score and cumulative distribution (cum)
+  #   x_name: x-label for the plot
+  #   col: array with colors to be used in the plot
+  #   add: ggplot object to be added to the plot (default NULL)
+  #   show_legend: boolean indicating whether to plot a legend (default False)
+  #
+  # Returns:
+  #   ggplot object with a line plot based on the input data
+  p <- ggplot(plot_data, aes(score, cum, color = biotype))
+  if (!is.null(add)) {
+    p <- p + add
+  }
+  p <- p +
+    geom_line(show.legend = show_legend) +
+    scale_x_continuous(
+      name = x_name,
+      limits = c(0, 1),
+      breaks = seq(0, 1, .2),
+      labels = seq(0, 1, .2),
+      expand = c(0, 0)
+    ) +
+    scale_y_continuous(
+      name = "Cumulative distribution",
+      limits = c(0, 1),
+      breaks = seq(0, 1, .2),
+      labels = seq(0, 1, .2),
+      expand = c(0, 0)
+    ) +
+    scale_color_manual(name = element_blank(), values = col)
+}
+
+create_orblq_barplot <- function(orbl_data, x_label) {
+  # Create barplot based on the ORBLq data
+  #
+  # Args:
+  #   orbl_data: dataframe with score and cumulative distribution (cum)
+  #   x_label: x-label for the plot
+  #
+  # Returns:
+  #   ggplot object with a barplot based on the input data
+  orbl_data %>%
+    group_by(biotype) %>% 
+    # Determine percentage of ncORFs with ORBLq score > .9
+    summarise(n = n(), n90 = sum(score > .9)) %>%
+    mutate(
+      perc = n90 / n,
+      biotype = factor(biotype, rev(orf_order)),
+      # Create y-labels showing number of ncORFs
+      y_lab = paste0(
+        biotype, "\n(n = ", formatC(n90, big.mark = ","),
+        " / ", formatC(n, big.mark = ","), ")"
+      )
+    ) %>%
+    {
+      ggplot(., aes(perc, biotype, fill = biotype)) +
+        geom_bar(stat = "identity", show.legend = FALSE) +
+        scale_x_continuous(
+          name = x_label,
+          expand = c(0, 0),
+          labels = label_percent(),
+          limits = c(0, .46)
+        ) +
+        scale_y_discrete(
+          labels = rev(.$y_lab),
+          name = element_blank(),
+          expand = c(0, 0)
+        ) +
+        scale_fill_manual(values = c(orbl_col[8:3])) +
+        geom_vline(xintercept = .1, linetype = "dashed")
+    }
+}
+```
+
+# Figure S6
+## Figure S6A
+```{r}
+orbl_ref <- read_table(orbl_ref_file, col_names = "score") %>%
+  arrange(score) %>%
+  mutate(
+    cum = row_number(),
+    orblq = cum / max(cum)
+  )
+
+figure_s6a <- ggplot(orbl_ref, aes(score, orblq)) +
+  geom_line() +
+  scale_x_continuous(
+    name = "ORBLv of matched ORFs",
+    breaks = seq(0, 1, .2),
+    labels = seq(0, 1, .2),
+    expand = c(0, 0)
+  ) +
+  scale_y_continuous(
+    name = "Cumulative distribution",
+    limits = c(0, 1),
+    breaks = seq(0, 1, .2),
+    expand = c(0, 0)
+  ) +
+  geom_hline(yintercept = .786, linetype = "dashed", color = green_col[1]) +
+  geom_vline(xintercept = .572, , linetype = "dashed", color = blue_col[1])
+
+ggsave("Figure_S6A.svg",
+  device = "svg", path = plot_dir, figure_s6a,
+  width = 60, height = 60, units = "mm"
+)
+```
+
+## Figure S6B-G
+```{r}
+orf_order <- c(
+  "CDS, ≤100 codons", "CDS, >100 codons", "uORF", "uoORF",
+  "intORF", "doORF",
+  "dORF", "lncRNA ORF", "Mixed", "Matched untranslated ORFs"
+)
+
+# Colors to be used in plot
+orbl_col <- carto_pal(11, "Safe")[c(1, 2, 4:11)]
+
+figure_s6b <- read_orbl_data(orblv_placental_file) %>%
+  make_orbl_plot("Placental mammal ORBLv\nncORF and MANE Select CDS",
+    orbl_col[1:10],
+    show_legend = TRUE
+  )
+
+figure_s6c <- read_orbl_data(orblv_primate_file) %>%
+  make_orbl_plot("Primate ORBLv\nncORF and MANE Select CDS", orbl_col[1:10])
+
+orbl_ncorfs <- read_delim(orbl_ncorf_file, delim = "\t") %>%
+  mutate(BiotypeV42 = str_replace(BiotypeV42, "-", " ") %>%
+           factor(orf_order))
+
+orblq_placental_data <- orbl_ncorfs %>%
+  select(score = ORBLq, biotype = BiotypeV42) %>%
+  process_orblq_data()
+
+orblq_primate_data <- orbl_ncorfs %>%
+  select(score = ORBLq_primate, biotype = BiotypeV42) %>%
+  process_orblq_data()
+
+# Create ploygon that highlights region on ORBLq lineplot with ORBLq > .9
+orlq_highlight <- geom_polygon(
+  data = data.frame(
+    x = c(.9, .9, 1, 1, .9),
+    y = c(0, .9, 1, 0, 0)
+  ),
+  aes(x = x, y = y),
+  fill = grey_col[8], , color = NA, show.legend = FALSE
+)
+
+figure_s6d <- make_orbl_plot(
+  orblq_placental_data, "Placental mammal ORBLq",
+  orbl_col[3:8], orlq_highlight
+) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
+  geom_vline(xintercept = .9, linetype = "dashed", color = "black")
+
+figure_s6e <-
+  create_orblq_barplot(
+    orblq_placental_data,
+    "Percentage ORFs with\nplacental mammal ORBLq > 0.9"
+  )
+
+figure_s6f <- make_orbl_plot(
+  orblq_primate_data, "Primate ORBLq",
+  orbl_col[3:8], orlq_highlight
+) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
+  geom_vline(xintercept = .9, linetype = "dashed", color = "black")
+
+figure_s6g <-
+  create_orblq_barplot(
+    orblq_primate_data,
+    "Percentage ORFs with\nprimate ORBLq > 0.9"
+  )
+
+figure_s6bg <- figure_s6b + figure_s6d + figure_s6e +
+  figure_s6c + figure_s6f + figure_s6g +
+  plot_layout(nrow = 2, guides = "collect")
+
+ggsave("Figure_S6BG.svg",
+  device = "svg", path = plot_dir, figure_s6bg,
+  width = 250, height = 120, units = "mm"
+)
+```
+
+## Figure S6H-I
+```{r}
+# Select all ncORFs that are detected in HLA-I samples (one peptide may match
+#  to multiple ncORFs)
+hla_i_support_orfs <- table_s4 %>%
+  filter(hla_class %in% c("I", "Both")) %>%
+  # Select all detected ncORFs, not just the main one linked to the peptide
+  select(identifier, Other.mappings) %>%
+  separate_rows(Other.mappings, sep = ",") %>%
+  pivot_longer(c(identifier, Other.mappings)) %>%
+  filter(str_starts(value, "CONTRIB_GENCODE")) %>%
+  distinct(value) %>%
+  mutate(
+    value = str_replace(value, "CONTRIB_GENCODE_", ""),
+    HLA_I_support = "yes"
+  ) %>%
+  dplyr::rename(`Ribo-Seq_ORF` = value)
+
+# Get ORBLq scores for all ncORFs, group by those detected on HLA-I
+hla_i_compare <- orbl_ncorfs %>%
+  left_join(hla_i_support_orfs, "Ribo-Seq_ORF") %>%
+  replace_na(list(HLA_I_support = "no")) %>%
+  arrange(BiotypeV42) %>%
+  group_by(BiotypeV42) %>%
+  mutate(bio_count = paste0(
+    BiotypeV42, "\n(n = ",
+    sum(HLA_I_support == "yes"), " vs. ",
+    sum(HLA_I_support == "no"), ")"
+  ) %>%
+    factor(unique(.))) %>%
+  ungroup() %>%
+  mutate(`-log10(1-ORBLq)` = -log10(1 - ORBLq)) %>%
+  filter(!is.na(BiotypeV42))
+
+# Determine number of detected and undetected ncORFs
+com_count <- hla_i_compare %>%
+  dplyr::count(HLA_I_support) %>%
+  deframe()
+
+figure_s6h <- hla_i_compare %>%
+  group_by(HLA_I_support) %>%
+  mutate(
+    orf_count = formatC(n(), big.mark = ","),
+    x_lab = paste0(
+      ifelse(HLA_I_support == "yes", "Detected",
+        "Undetected"
+      ),
+      "\n(n = ", orf_count, ")"
+    )
+  ) %>%
+  {
+    ggplot(., aes(x_lab, `-log10(1-ORBLq)`)) +
+      geom_violin(aes(fill = HLA_I_support), show.legend = FALSE) +
+      geom_boxplot(alpha = 0) +
+      scale_x_discrete(
+        expand = c(0, 0),
+        name = element_blank()
+      ) +
+      scale_y_continuous(
+        expand = c(0, 0),
+        limits = c(0, 4)
+      ) +
+      scale_fill_manual(values = green_col[c(1, 4)]) +
+      geom_pwc(
+        remove.bracket = TRUE,
+        label = "p = {p}",
+        label.size = 7 / .pt
+      )
+  }
+
+figure_s6i <- hla_i_compare %>%
+  {
+    ggplot(., aes(
+      x = bio_count, y = `-log10(1-ORBLq)`, split = HLA_I_support,
+      fill = HLA_I_support
+    )) +
+      geom_half_violin(position = "identity", trim = TRUE) +
+      geom_half_boxplot(
+        data = filter(., HLA_I_support == "yes"),
+        position = "identity",
+        outlier.shape = NA,
+        alpha = 0, outlier.alpha = 1, show.legend = FALSE
+      ) +
+      geom_half_boxplot(
+        data = filter(., HLA_I_support == "no"),
+        position = "identity", side = "r",
+        outlier.shape = NA,
+        alpha = 0, outlier.alpha = 1, show.legend = FALSE
+      ) +
+      scale_x_discrete(name = element_blank(), expand = c(0, 0)) +
+      scale_y_continuous(
+        expand = c(0, 0),
+        limits = c(0, 4)
+      ) +
+      scale_fill_manual(
+        name = "Detected on HLA-I",
+        values = green_col[c(1, 4)],
+        labels = c("Yes", "No")
+      ) +
+      geom_pwc(
+        method = "wilcox_test",
+        remove.bracket = TRUE,
+        label = "p = {p.adj}",
+        label.size = 7 / .pt,
+        p.adjust.method = "holm",
+        p.adjust.by = "panel",
+        hide.ns = TRUE
+      )
+  }
+
+figure_s6hi <- figure_s6h + figure_s6i +
+  plot_layout(widths = c(2, 6))
+
+ggsave("Figure_S6HI.svg", figure_s6hi,
+  device = "svg", path = plot_dir,
+  width = 215, height = 60, units = "mm"
+)
+```
