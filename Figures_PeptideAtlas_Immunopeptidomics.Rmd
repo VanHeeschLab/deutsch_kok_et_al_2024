@@ -1,0 +1,1801 @@
+---
+title: "Script to create figures related to the immunopeptidomics data"
+output: html_document
+author: "Leron Kok"
+---
+
+# Pre-processing
+## Declare libraries
+```{r}
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(here)
+  library(patchwork)
+  library(Peptides)
+  library(ggpubr)
+  library(grid)
+  library(stringi)
+  library(RColorBrewer)
+  library(scales)
+})
+```
+
+## Load required data and define directories and files
+```{r}
+utils::globalVariables(c("protein", "detected", "order_ids", "y_val",
+                         "fill_group", "fc"))
+source("load_tables.R")
+source("load_peptideatlas_data.R")
+source("load_plot_aesthetics.R")
+
+processed_dir <- here("processed")
+plot_dir <- file.path(processed_dir, "plots")
+
+# GTEX FPKM mean expression data (excluding testis)
+gtex_fpkm_file <- file.path(raw_dir, "GTEX_FPKMmean_expression.txt")
+gtex_data <- read.csv(gtex_fpkm_file)
+
+# List of genes associated with cancer from the Cancer Gene Census
+cancer_census_file <-
+  file.path(raw_dir, "Census_allThu_Jan_4_14_08_58_2024.csv")
+
+# Canonical proteins detected on HLA-I
+prot_can_hlai <- pep_can %>%
+  ungroup() %>%
+  semi_join(peptide_hla %>%
+              filter(hla_class == "I"), "peptide") %>%
+  distinct(protein_accession) %>%
+  semi_join(can_id, "protein_accession")
+
+# ncORFs detected on HLA-I (one peptide may be linked to multiple ncORFs)
+prot_nonc_hlai <- pep_nonc_long %>%
+  ungroup() %>%
+  semi_join(peptide_hla %>%
+              filter(hla_class == "I"), "peptide") %>%
+  distinct(protein_accession)
+
+# HLA-I detectability of ncORF and CDS
+seq_stats <- can_nonc_seq %>%
+  # Filter out protein sequences with Selenocysteine (not recognized by the
+  #  Peptides package)
+  filter(!str_detect(protein, "U")) %>%
+  mutate(
+    pro_cat = ifelse(str_starts(protein_accession, "CONTRIB_GENCODE_"),
+      "Non-canonical", "Canonical"
+    ),
+    len = nchar(protein)
+  ) %>%
+  # Filter for minimum length of 16 amino acids (used for ncORF list creation)
+  filter(len >= 16) %>%
+  left_join(
+    bind_rows(prot_can_hlai, prot_nonc_hlai) %>%
+      mutate(detected = "Detected"), "protein_accession"
+  ) %>%
+  left_join(
+    orf_sequences %>% distinct(protein_accession, orf_biotype),
+    "protein_accession"
+  ) %>%
+  replace_na(list(detected = "Undetected", orf_biotype = "CDS"))
+```
+
+## Define functions
+```{r}
+get_stats <- function(df) {
+  # Determine the length, hydrophobicity and isoelectric point for proteins
+  #
+  # Args:
+  #   df: dataframe with protein column
+  #
+  # Returns:
+  #   Same as input, with the added columns len, hydro and pi
+  df %>% mutate(
+    len = nchar(protein),
+    hydro = hydrophobicity(protein, "KyteDoolittle"),
+    pi = pI(protein)
+  )
+}
+
+perform_wtest <- function(df) {
+  # Perform wilcox test
+  #
+  # Args:
+  #   df: dataframe with the columns y_val and detected
+  #
+  # Returns:
+  #   p-value outputted by the wilcox test
+  w_test <- wilcox.test(y_val ~ detected,
+    data = df %>% mutate(detected = factor(
+      detected,
+      levels = c("Detected", "Undetected")
+    ))
+  )
+  p_val <- w_test$p.value
+  return(p_val)
+}
+
+format_pval <- function(p_val) {
+  # Process raw p-value to a formatted string
+  #
+  # Args:
+  #   p_val: raw p-value as a number
+  #
+  # Returns:
+  #   string with the formatted p-value
+  p_val <- case_when(
+    p_val >= 0.05 ~ "p = n.s.",
+    p_val >= 0.010 ~ paste0("p = ", round(p_val, 3)),
+    p_val == 0 ~ "p = 0",
+    .default = paste0("p = ", format(p_val, scientific = TRUE, digits = 4) %>%
+                        str_replace("e", "\u00D710"))
+  )
+  return(p_val)
+}
+
+get_pvals_holms <- function(df) {
+  # Determine p-values with Bonferroni–Holm correction
+  #
+  # Args:
+  #   df: dataframe with the column detected and any number of columns with
+  #    test values
+  #
+  # Returns:
+  #   dataframe with for each of the test columns a formatted p-value
+  df %>%
+    pivot_longer(-detected, values_to = "y_val") %>%
+    split(~name) %>%
+    sapply(perform_wtest) %>%
+    p.adjust(method = "holm") %>%
+    sapply(format_pval) %>%
+    enframe()
+}
+
+create_violin <- function(violin_data, y_label, p_val, y_lim,
+                          n_colors = c(1:8), log = FALSE, pseudo_log = FALSE,
+                          x_label = element_blank(), y_breaks = waiver()) {
+  # Create violin plots split by detected and undetected ORF characteristics
+  #
+  # Args:
+  #   violin_data: dataframe with the data to plot
+  #   y_label: string with the y-axis label
+  #   p_val: p-value to be shown in the plot
+  #   y_lim: limits of the y-axis
+  #   n_colors: array with indices of colors to use (from v_colors below)
+  #   log: boolean indicating whether to use a logarithmic y-scale,
+  #    default False
+  #   pseudo_log: boolean indicating whether to use a pseudo-log scale,
+  #    default False
+  #   x_label: string with the x-axis label, default no label
+  #   y_breaks: array indicating y-break label positions, default is ggplot
+  #    defaults
+  #
+  # Returns:
+  #   ggplot object with the violin plot
+  counts <- violin_data %>%
+    dplyr::count(detected) %>%
+    mutate(n = format(n, big.mark = ",")) %>%
+    deframe()
+  # Process p-value to be shown in plot
+  p_label <- grobTree(textGrob(p_val,
+    x = 0.5, y = 1, just = c("center", "top"),
+    gp = gpar(col = "black", fontsize = 7)
+  ))
+  # Standard colors to be used for plots
+  v_colors <- c(
+    blue_col[c(1, 4)], green_col[c(1, 4)], purple_col[c(1, 4)],
+    pink_col[c(1, 4)]
+  )[n_colors]
+  v_plot <- ggplot(violin_data, aes(order_ids, y = y_val, fill = fill_group)) +
+    geom_violin(trim = TRUE, show.legend = FALSE) +
+    geom_boxplot(fill = "transparent", outlier.shape = NA) +
+    scale_fill_manual(values = v_colors) +
+    scale_x_discrete(
+      name = ifelse(x_label == "", element_blank(), x_label),
+      labels = c(
+        paste0(
+          "Detected\n(n = ",
+          counts[["Detected"]], ")"
+        ),
+        paste0(
+          "Undetected\n(n = ",
+          counts[["Undetected"]], ")"
+        )
+      )
+    ) +
+    annotation_custom(p_label)
+  if (log) {
+    v_plot <- v_plot + scale_y_log10(
+      name = y_label, limits = y_lim,
+      breaks = y_breaks
+    )
+  } else if (pseudo_log) {
+    v_plot <- v_plot + scale_y_continuous(
+      trans = scales::pseudo_log_trans(base = 10),
+      name = y_label, limits = y_lim, breaks = y_breaks
+    )
+  } else {
+    v_plot <- v_plot + scale_y_continuous(
+      name = y_label, limits = y_lim,
+      breaks = y_breaks
+    )
+  }
+  return(v_plot)
+}
+
+create_dis_plot <- function(plot_data, x_name, plot_colors, x_breaks = waiver(),
+                            y_breaks = waiver(), y_name = "Density") {
+  # Create density plot split by cancer sample detectability of peptides
+  #
+  # Args:
+  #   plot_data: dataframe with the data to plot
+  #   x_name: string with the x-axis label
+  #   plot_colors: colors to be used in the plot
+  #   x_breaks: array indicating y-break label positions, default is ggplot
+  #    defaults
+  #   y_breaks: array indicating y-break label positions, default is ggplot
+  #    defaults
+  #   y_name: string with the y-axis label, default is "Density"
+  #
+  # Returns:
+  #   ggplot object with the density plot
+  plot_data +
+    geom_density(
+      alpha = .4, adjust = 1.5, linewidth = 0.5,
+      show.legend = FALSE
+    ) +
+    scale_x_continuous(expand = c(0, 0), breaks = x_breaks, name = x_name) +
+    scale_y_continuous(expand = c(0, 0), breaks = y_breaks, name = y_name) +
+    scale_color_manual(values = plot_colors)
+}
+```
+
+# Figure 2 - HLA figures
+## Figure 2E-H - Compare orf categories
+```{r}
+# Determine certain characteristics for each ORF
+orf_pep_stats <- pep_nonc %>%
+  rowwise() %>%
+  # Determine percentage of ncORF sequence covered by detected peptides
+  mutate(cov = paste0(start_loc:end_loc, collapse = ",")) %>%
+  group_by(orf_name) %>%
+  summarise(n_pep = n(), cov = paste0(cov, collapse = ",")) %>%
+  rowwise() %>%
+  mutate(n_cov = cov %>%
+           str_split(",", simplify = TRUE) %>%
+           as.numeric() %>%
+           na.omit() %>%
+           unique() %>%
+           length()) %>%
+  select(-cov) %>%
+  full_join(orf_sequences, "orf_name") %>%
+  replace_na(list(n_pep = 0, n_cov = 0)) %>%
+  mutate(
+    orf_len = nchar(protein),
+    perc_cov = n_cov / orf_len,
+    cov_cat = cut(perc_cov,
+      breaks = seq(0, 1, 0.1),
+      labels = sapply(seq(0, 90, 10), function(i) {
+        paste0(i, "-", i + 10, "%")
+      })
+    )
+  ) %>%
+  make_biotype_levels() %>%
+  ungroup()
+
+# Determine number of ncORFs and peptides per biotype
+orf_pep_stats_count <- orf_pep_stats %>%
+  group_by(orf_biotype) %>%
+  summarise(n_orf = sum(n_pep >= 1), n_pep = sum(n_pep)) %>%
+  pivot_longer(-orf_biotype) %>%
+  mutate(name = factor(name, levels = c("n_pep", "n_orf")))
+
+# Get Riboseq quality from table S5
+orf_quality <- table_s5 %>%
+  filter(n_peptides_in_entry >= 2) %>%
+  mutate(
+    is_sufficient = Manual.inspection.of.GWIPS.Viz.RiboSeq.Data !=
+      "Insufficient",
+    study = ifelse(str_detect(identifier, "norep"), "1", ">1"),
+    study = factor(study, levels = c("1", ">1"))
+  ) %>%
+  group_by(study) %>%
+  dplyr::count(is_sufficient)
+
+figure_2e <- ggplot(
+  orf_pep_stats_count,
+  aes(y = value, x = orf_biotype, fill = name)
+) +
+  geom_bar(position = position_dodge(), stat = "identity",
+           show.legend = FALSE) +
+  scale_x_discrete(name = element_blank(), expand = c(0, 0)) +
+  scale_y_continuous(name = "Number of detections", expand = c(0, 0)) +
+  scale_fill_manual(values = green_col[c(6, 1)]) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+figure_2f <- ggplot(orf_pep_stats %>%
+                      dplyr::count(n_pep) %>%
+                      filter(n_pep > 0), aes(y = n, x = n_pep)) +
+  geom_bar(
+    position = "stack", stat = "identity", show.legend = FALSE,
+    fill = green_col[1]
+  ) +
+  scale_x_continuous(
+    name = "Number of distinct peptides", expand = c(0, 0),
+    breaks = 1:16
+  ) +
+  scale_y_continuous(name = "Number of non-canonical ORFs", expand = c(0, 0)) +
+  geom_text(aes(label = n), size = 6 / .pt)
+
+figure_2g <-
+  ggplot(
+    orf_pep_stats %>%
+      filter(perc_cov > 0) %>%
+      mutate(n_pep = ifelse(n_pep > 1, "2", "1")),
+    aes(perc_cov, orf_len, color = n_pep)
+  ) +
+  geom_point(show.legend = FALSE) +
+  geom_smooth(
+    method = "loess", formula = y ~ x, se = TRUE,
+    mapping = aes(color = n_pep), linewidth = 1,
+    show.legend = FALSE
+  ) +
+  scale_x_continuous(
+    name = "Percentage aa covered", expand = c(0, 0),
+    limits = c(0, 1), breaks = c(0, .25, .5, .75, 1),
+    labels = c("0%", "25%", "50%", "75%", "100%")
+  ) +
+  scale_y_continuous(
+    name = "ncORF length (aa)", limits = c(0, NA),
+    expand = c(0, 0)
+  ) +
+  scale_color_manual(
+    name = element_blank(), values = c(green_col[1], blue_col[4]),
+    labels = c("Detected by single peptide", "Detected by multiple peptides")
+  )
+
+figure_2h <- ggplot(orf_quality, aes(y = n, x = study, fill = is_sufficient)) +
+  geom_bar(position = "stack", stat = "identity", show.legend = FALSE) +
+  scale_x_discrete(
+    name = "Number of studies\nin which ncORF\nwas detected",
+    expand = c(0, 0)
+  ) +
+  scale_y_continuous(name = "Number of non-canonical ORFs", expand = c(0, 0)) +
+  scale_fill_manual(values = c(grey_col[7], green_col[1]))
+
+figure_2eh <- figure_2e + figure_2f + figure_2g + figure_2h +
+  plot_layout(nrow = 1, widths = c(1.6, 2.6, 1.4, 1))
+
+ggsave("Figure_2EH.svg",
+  device = "svg", path = plot_dir, figure_2eh,
+  width = 2500, height = 700, units = "px"
+)
+
+# Statistical test for figure 2G - mean length of ncORFs covered by 1 and > 1
+#  peptide
+wilcox.test(
+  data = orf_pep_stats %>%
+    filter(perc_cov > 0) %>%
+    mutate(n_pep = ifelse(n_pep > 1, "2", "1")),
+  orf_len ~ n_pep
+)$p.value
+
+orf_pep_stats %>%
+  filter(perc_cov > 0) %>%
+  mutate(n_pep = ifelse(n_pep > 1, "2", "1")) %>%
+  group_by(n_pep) %>%
+  summarize(mean_len = mean(orf_len), .groups = "drop")
+```
+
+# Figure 3 - Detection determinants
+## Figure 3A - Undetected vs detected
+```{r}
+# Determine pi, hydrophobicity and length for full CDS/ncORF sequences, and
+#  for the first and last 30% of the sequences
+seq_stats_properties <- seq_stats %>%
+  dplyr::rename(full_len = len) %>%
+  mutate(to_duplicate = ifelse(pro_cat != "Canonical", 3, 1)) %>%
+  uncount(to_duplicate) %>%
+  group_by(protein_accession) %>%
+  mutate(
+    pro_cat = case_when(
+      row_number() == 1 ~ paste0(pro_cat, "__full"),
+      row_number() == 2 ~ paste0(pro_cat, "__start"),
+      row_number() == 3 ~ paste0(pro_cat, "__end")
+    ),
+    protein = case_when(
+      row_number() == 1 ~ protein,
+      # Add 0.001 to round to ensure .5 is always rounded up
+      row_number() == 2 ~ str_sub(
+        protein, 2,
+        round(full_len * 0.3 + 0.001) + 1
+      ),
+      row_number() == 3 ~ str_sub(
+        protein,
+        full_len - round(full_len * 0.3 + 0.001) + 1,
+        full_len
+      )
+    )
+  ) %>%
+  get_stats() %>%
+  group_by(protein_accession) %>%
+  filter(len >= 16) %>%
+  select(-protein, -full_len) %>%
+  ungroup() %>%
+  mutate(
+    # Order ids is used for ordering the violin plots
+    order_ids = ifelse(detected == "Detected", "1", "2"),
+    fill_group = paste0(pro_cat, "__", detected)
+  )
+
+l_lab <- "Sequence\nlength (aa)"
+h_lab <- "Hydrophobicity\n(Kyte-Doolittle)"
+p_lab <- "Isoelectric\npoint"
+v_cats <- c("Non-canonical__full", "Canonical__full")
+
+# Determine Bonferroni–Holm corrected p-values (corrected separately for
+#  CDS and ncORFs)
+p_vals_violin <-
+  bind_rows(
+    seq_stats_properties %>%
+      filter(pro_cat == v_cats[1]) %>%
+      select(pi, hydro, len, detected) %>%
+      get_pvals_holms() %>%
+      mutate(cat = "noncanonical"),
+    seq_stats_properties %>%
+      filter(pro_cat == v_cats[2]) %>%
+      select(pi, hydro, len, detected) %>%
+      get_pvals_holms() %>%
+      mutate(cat = "canonical")
+  ) %>%
+  pivot_wider(names_from = cat, values_from = value) %>%
+  column_to_rownames("name")
+
+figure_3a1 <- lapply(1:2, function(i) {
+  cat <- v_cats[i]
+  limits <- list(c(NA, NA), c(NA, NA))
+  plot_data <- seq_stats_properties %>%
+    filter(pro_cat == cat) %>%
+    mutate(y_val = len)
+  p_val <- p_vals_violin["len", i]
+  create_violin(plot_data, l_lab, p_val, limits[[i]],
+    n_colors = c((4 * i - 1):(4 * i)), log = TRUE
+  )
+})
+figure_3a2 <- lapply(1:2, function(i) {
+  cat <- v_cats[i]
+  plot_data <- seq_stats_properties %>%
+    filter(pro_cat == cat) %>%
+    mutate(y_val = hydro)
+  p_val <- p_vals_violin["hydro", i]
+  create_violin(plot_data, h_lab, p_val, c(-4.1, 2.5),
+    n_colors = c((4 * i - 1):(4 * i))
+  )
+})
+figure_3a3 <- lapply(1:2, function(i) {
+  cat <- v_cats[i]
+  plot_data <- seq_stats_properties %>%
+    filter(pro_cat == cat) %>%
+    mutate(y_val = pi)
+  p_val <- p_vals_violin["pi", i]
+  create_violin(plot_data, p_lab, p_val, c(2.9, 14),
+    n_colors = c((4 * i - 1):(4 * i))
+  )
+})
+
+figure_3a <- lapply(1:6, function(i) {
+  one_plot <- c(figure_4A1, figure_4A2, figure_4A3)[[i]]
+  if (i <= 4) {
+    one_plot <- one_plot + remove_x
+  }
+  if (i %in% c(4, 6)) {
+    one_plot <- one_plot + remove_y
+  }
+  if (i == 2) {
+    one_plot <- one_plot + theme(axis.title.y = element_blank())
+  }
+  return(one_plot)
+}) %>% wrap_plots(figure_3a_plots, ncol = 2)
+
+ggsave("Figure_3A.svg",
+  device = "svg", path = plot_dir, figure_3a,
+  width = 1250, height = 1750, units = "px"
+)
+```
+
+## Figure 3B - Hydrophobicity end of sequence
+```{r}
+# Using a sliding frame of 15 amino acids, determine the average hydrophobicity
+#  for the last 100 amino acids for canonical proteins and ncORFs
+seq_stats_hydro <- seq_stats %>%
+  mutate(
+    protein = stri_reverse(protein),
+    duplicate = 101
+  ) %>%
+  uncount(duplicate) %>%
+  group_by(protein_accession) %>%
+  mutate(
+    start = row_number(), end = start + 14,
+    protein = str_sub(protein, start, end),
+    pro_len = nchar(protein),
+    c_offset = -(start - 1),
+    hydro = hydrophobicity(protein, "KyteDoolittle")
+  ) %>%
+  # Only keep average hydrophobicity if it is based on 15 amino acids
+  filter(pro_len >= 15)
+
+# Group average hydrophobicity by biotype and add confidence intervals
+seq_stats_hydro_grouped <- seq_stats_hydro %>%
+  group_by(orf_biotype, c_offset) %>%
+  mutate(
+    low_conf = t.test(hydro)$conf.int[1],
+    high_conf = t.test(hydro)$conf.int[2]
+  ) %>%
+  summarise(
+    hydro = mean(hydro), low_conf = first(low_conf),
+    high_conf = first(high_conf)
+  ) %>%
+  filter(!orf_biotype %in% c("doORFs", "Processed transcript ORFs"))
+
+# Factor orf biotype by line order on right side of graph
+seq_stats_hydro_grouped_order <- seq_stats_hydro_grouped %>%
+  filter(c_offset == 0) %>%
+  arrange(-hydro) %>%
+  pull(orf_biotype)
+
+seq_stats_hydro_grouped <- seq_stats_hydro_grouped %>%
+  mutate(orf_biotype = factor(orf_biotype,
+    levels = seq_stats_hydro_grouped_order
+  ))
+
+figure_3b <- ggplot(
+  seq_stats_hydro_grouped,
+  aes(x = c_offset, y = hydro, group = orf_biotype)
+) +
+  geom_linerange(aes(ymin = low_conf, ymax = high_conf, color = orf_biotype),
+    alpha = 0.5, linewidth = 0.3
+  ) +
+  geom_point(mapping = aes(color = orf_biotype), size = .2) +
+  geom_smooth(
+    method = "loess", formula = y ~ x, se = FALSE,
+    mapping = aes(color = orf_biotype), linewidth = .7
+  ) +
+  scale_x_continuous(
+    expand = c(0, 0),
+    name = "Position relative to C-terminus"
+  ) +
+  scale_y_continuous(
+    limits = c(-1, 0.5), expand = c(0, 0),
+    name = "Hydrophobicity (Kyte-Doolittle)"
+  ) +
+  scale_color_manual(
+    values = brewer.pal(6, "Dark2"),
+    name = "ORF/protein category"
+  )
+
+ggsave("Figure_3B.svg",
+  device = "svg", path = plot_dir, figure_3b,
+  width = 1250, height = 1250, units = "px"
+)
+```
+
+## Figure 3C - Peptide location
+```{r}
+# Determine peptide start and end offsets for canonical and noncanonical
+#  peptides
+pep_pos_can <- pep_can %>%
+  inner_join(can_id, "protein_accession") %>%
+  inner_join(can_nonc_seq, "protein_accession") %>%
+  semi_join(peptide_hla %>%
+              filter(hla_class == "I"), "peptide") %>%
+  distinct(protein, peptide, start_loc, end_loc) %>%
+  mutate(
+    len = nchar(protein),
+    start_offset = start_loc - 1,
+    end_offset = -(len - end_loc)
+  )
+
+pep_pos_nonc <- pep_nonc %>%
+  semi_join(peptide_hla %>%
+              filter(hla_class == "I"), "peptide") %>%
+  distinct(protein, peptide, start_loc, end_loc) %>%
+  mutate(
+    len = nchar(protein),
+    start_offset = start_loc - 1,
+    end_offset = -(len - end_loc)
+  )
+
+# Determine max y-axis range for plots
+can_lim <- c(0, pep_pos_can %>% filter(end_offset == 0) %>% nrow())
+nonc_lim <- c(0, pep_pos_nonc %>% filter(end_offset == 0) %>% nrow())
+
+perform_fisher_test <- function(df) {
+  # Function to perform Fisher's test
+  df$p_val <- fisher.test(df %>% select(-fc))$p.value
+  return(df)
+}
+
+process_data <- function(data, filter_condition, offset_col, numerator,
+                         denominator) {
+  # Compute fold change using the fiven conditions
+  data %>%
+    filter({{ filter_condition }}) %>%
+    ungroup() %>%
+    count(!!sym(offset_col)) %>%
+    pivot_wider(
+      names_from = !!sym(offset_col), values_from = n,
+      values_fill = 0
+    ) %>%
+    mutate(fc = !!sym(numerator) / !!sym(denominator))
+}
+
+# Compute statistics on fold changes
+start_fc <- lapply(list(pep_pos_can, pep_pos_nonc), function(i) {
+  process_data(i, start_offset <= 1, "start_offset", "1", "0")
+}) %>%
+  bind_rows() %>%
+  perform_fisher_test()
+
+end_fc <- lapply(list(pep_pos_can, pep_pos_nonc), function(i) {
+  process_data(i, end_offset >= -1, "end_offset", "0", "-1")
+}) %>%
+  bind_rows() %>%
+  perform_fisher_test()
+
+# Determine fold change and fisher exact test p-values for start and end offset
+fold_changes <- bind_rows(
+  pep_pos_can %>% mutate(cat = "can"),
+  pep_pos_nonc %>% mutate(cat = "nonc")
+) %>%
+  ungroup() %>%
+  select(cat, start_offset, end_offset) %>%
+  pivot_longer(-cat) %>%
+  filter((name == "start_offset" & value <= 1) |
+           (name == "end_offset" & value >= -1)) %>%
+  dplyr::count(cat, name, value) %>%
+  mutate(value = factor(value, c(0, 1, -1))) %>%
+  arrange(value) %>%
+  group_by(cat, name) %>%
+  mutate(fc = first(n) / last(n)) %>%
+  ungroup()
+
+fisher_tests <- sapply(c("start_offset", "end_offset"), function(i) {
+  fold_changes %>%
+    filter(name == i) %>%
+    select(n, cat, value) %>%
+    pivot_wider(values_from = n, names_from = cat) %>%
+    select(-value) %>%
+    fisher.test() %>%
+    .$p.value
+})
+
+can_start <- ggplot(
+  pep_pos_can %>% filter(start_offset <= 25),
+  aes(x = start_offset)
+) +
+  geom_histogram(
+    binwidth = 1, color = "white", linewidth = 0.2,
+    fill = pink_col[1]
+  ) +
+  scale_x_continuous(
+    name = element_blank(),
+    expand = c(0, 0)
+  ) +
+  scale_y_continuous(
+    name = "Number of\ncanonical peptides",
+    expand = c(0, 0),
+    n.breaks = 3,
+    labels = label_number(scale_cut = cut_short_scale()),
+    limits = can_lim
+  ) +
+  theme(axis.ticks.x = element_blank(), axis.text.x = element_blank())
+
+can_end <- ggplot(
+  pep_pos_can %>% filter(end_offset >= -25),
+  aes(x = end_offset)
+) +
+  geom_histogram(
+    binwidth = 1, color = "white", linewidth = 0.2,
+    fill = pink_col[1]
+  ) +
+  scale_x_continuous(
+    name = element_blank(),
+    expand = c(0, 0)
+  ) +
+  scale_y_continuous(
+    name = element_blank(),
+    expand = c(0, 0),
+    limits = can_lim
+  ) +
+  theme(axis.ticks = element_blank(), axis.text = element_blank())
+
+nonc_start <- ggplot(
+  pep_pos_nonc %>% filter(start_offset <= 25),
+  aes(x = start_offset)
+) +
+  geom_histogram(
+    binwidth = 1, color = "white", linewidth = 0.2,
+    fill = green_col[1]
+  ) +
+  scale_x_continuous(
+    name = "Position relative to N-terminus (aa)",
+    expand = c(0, 0)
+  ) +
+  scale_y_continuous(
+    name = "Number of\nncORF peptides",
+    expand = c(0, 0),
+    n.breaks = 3,
+    limits = nonc_lim
+  )
+
+nonc_end <- ggplot(
+  pep_pos_nonc %>% filter(end_offset >= -25),
+  aes(x = end_offset)
+) +
+  geom_histogram(
+    binwidth = 1, color = "white", linewidth = 0.2,
+    fill = green_col[1]
+  ) +
+  scale_x_continuous(
+    name = "Position relative to N-terminus (aa)",
+    expand = c(0, 0)
+  ) +
+  scale_y_continuous(
+    name = element_blank(),
+    expand = c(0, 0),
+    limits = nonc_lim
+  ) +
+  theme(axis.ticks.y = element_blank(), axis.text.y = element_blank())
+
+figure_3c <- (can_start + can_end) / (nonc_start + nonc_end)
+
+ggsave("Figure_3C.svg",
+  device = "svg", path = plot_dir, figure_3c,
+  width = 1100, height = 800, units = "px"
+)
+```
+
+## Figure 3D - Expression
+```{r}
+# Determine mean fpkm per gene
+gtex_df <- gtex_data %>%
+  dplyr::rename(gene_id = X) %>%
+  pivot_longer(-gene_id) %>%
+  group_by(gene_id) %>%
+  summarise(mean_fpkm = mean(value))
+
+# Link mean fpkm to ncORF genes
+orf_gtex <- seq_stats %>%
+  inner_join(orf_sequences %>%
+               select(protein_accession, gene_id), "protein_accession") %>%
+  inner_join(gtex_df, "gene_id") %>%
+  mutate(y_val = mean_fpkm) %>%
+  mutate(
+    order_ids = ifelse(detected == "Detected", "1", "2"),
+    fill_group = paste0(pro_cat, "__", detected)
+  )
+
+# Number of missing ncORFs genes in GTEx
+orf_sequences %>%
+  anti_join(orf_gtex, "protein_accession") %>%
+  nrow()
+
+# Mean FPKM statistics
+orf_gtex %>%
+  group_by(detected) %>%
+  summarise(mean_y = mean(y_val))
+
+p_val_gtex <- perform_wtest(orf_gtex) %>% format_pval()
+
+figure_3d <- create_violin(orf_gtex %>% filter(y_val > 0), "Mean FPKM",
+  p_val_gtex, c(0, 1600),
+  n_colors = c(3, 4),
+  pseudo_log = TRUE,
+  y_breaks = c(0, 10, 250, 500, 1000, 2000)
+)
+
+ggsave("Figure_3D.svg",
+  device = "svg", path = plot_dir, figure_3d,
+  width = 625, height = 600, units = "px"
+)
+```
+
+# Figure S3 - HLA class and ncORF peptide origin
+## Figure S3A - Peptide classification
+```{r}
+# Determine number of CDS and ncORF per length and HLA class category
+barplot_data <- peptide_hla %>%
+  group_by(peptide) %>%
+  mutate(hla_class = ifelse(n_distinct(hla_class) > 1, "Both", hla_class)) %>%
+  ungroup() %>%
+  distinct(peptide, hla_class, pep_type) %>%
+  mutate(
+    pep_len = nchar(peptide),
+    pep_len_cat = case_when(
+      pep_len < 8 ~ "7",
+      pep_len > 12 ~ "13-35",
+      TRUE ~ "8-12"
+    )
+  ) %>%
+  dplyr::count(hla_class, pep_type, pep_len_cat)
+
+# Process barplot_data to include percentages and colors per bar
+## Category 1: Sample count
+cat1 <- peptide_hla %>%
+  distinct(dataset_id, ms_name, hla_class) %>%
+  dplyr::count(hla_class) %>%
+  mutate(cat = 1, pep_type = "all") %>%
+  dplyr::rename(group = hla_class)
+
+## Category 2: Total peptides by class
+cat2 <- barplot_data %>%
+  group_by(hla_class) %>%
+  summarise(n = sum(n), .groups = "drop") %>%
+  mutate(cat = 2, pep_type = "all") %>%
+  dplyr::rename(group = hla_class)
+
+## Category 3: Split by class and pep_type
+cat3 <- barplot_data %>%
+  group_by(hla_class, pep_type) %>%
+  summarise(n = sum(n), .groups = "drop") %>%
+  mutate(cat = 3) %>%
+  dplyr::rename(group = hla_class)
+
+## Category 4: Filtered by length and class
+cat4 <- barplot_data %>%
+  filter(hla_class %in% c("I", "Both"), pep_type != "other") %>%
+  group_by(pep_len_cat, pep_type) %>%
+  summarise(n = sum(n), .groups = "drop") %>%
+  mutate(cat = 4) %>%
+  dplyr::rename(group = pep_len_cat)
+
+## Category 5: Known HLA count
+cat5 <- hla_df %>%
+  distinct(peptide, pep_type) %>%
+  dplyr::count(pep_type) %>%
+  filter(pep_type != "other") %>%
+  mutate(cat = 5, group = "Known_HLA")
+
+## Combine all and calculate unknowns
+combined_data <- bind_rows(cat1, cat2, cat3, cat4, cat5) %>%
+  pivot_wider(names_from = c(group, cat), values_from = n) %>%
+  mutate(Unknown_HLA_5 = `8-12_4` - Known_HLA_5)
+
+## Tidy long format
+barplot_data_cat <- combined_data %>%
+  pivot_longer(-pep_type, names_to = "name", values_to = "value") %>%
+  filter(!is.na(value)) %>%
+  mutate(
+    cat = as.integer(str_extract(name, "\\d$")),
+    group = str_remove(name, "_\\d$")
+  ) %>%
+  select(-name) %>%
+  group_by(cat, pep_type) %>%
+  mutate(perc = value / sum(value), sums = sum(value)) %>%
+  ungroup()
+
+## Category order
+cats <- c("I", "Both", "II", "8-12", "13-35", "Known_HLA", "Unknown_HLA")
+
+## Add color mapping
+color_map <- data.frame(
+  group = cats,
+  fill_color = c(
+    blue_col[1], grey_col[5], grey_col[3], blue_col[4], blue_col[2],
+    blue_col[7], blue_col[5]
+  )
+)
+
+## Finalize with colors and factor levels
+barplot_data_cat <- barplot_data_cat %>%
+  left_join(color_map, by = "group") %>%
+  mutate(
+    cat = factor(cat, levels = 1:5),
+    group = factor(group, levels = cats)
+  )
+
+barplot_sums <- barplot_data_cat %>%
+  distinct(cat, pep_type, sums) %>%
+  mutate(
+    rowname = paste0(pep_type, "_", cat),
+    sums = formatC(sums, big.mark = ",")
+  ) %>%
+  column_to_rownames("rowname")
+
+p_overview_1 <- ggplot() +
+  geom_bar(
+    data = barplot_data_cat %>% filter(cat == 1 | cat == 2),
+    aes(x = cat, y = perc, fill = fill_color, group = group),
+    stat = "identity"
+  ) +
+  scale_fill_identity() +
+  scale_y_continuous(expand = c(0, 0), name = element_blank()) +
+  scale_x_discrete(
+    name = element_blank(),
+    labels = c(
+      paste0(annotations %>%
+               distinct(dataset_id) %>%
+               nrow(), " datasets"),
+      paste0(
+        "All peptides\n(n = ",
+        barplot_sums["all_2", "sums"], ")"
+      )
+    ),
+    expand = c(0, 0)
+  ) +
+  theme(
+    axis.line = element_blank(), axis.ticks = element_blank(),
+    axis.text.y = element_blank()
+  )
+
+p_overview_2a <- ggplot() +
+  geom_bar(
+    data = barplot_data_cat %>% filter(
+      (cat == 3 | cat == 4 | cat == 5),
+      pep_type == "canonical"
+    ),
+    aes(x = cat, y = value, fill = fill_color, group = group),
+    stat = "identity"
+  ) +
+  scale_fill_identity() +
+  scale_y_continuous(name = element_blank(), expand = c(0, 0)) +
+  scale_x_discrete(
+    name = element_blank(), expand = c(0, 0),
+    labels = c(
+      paste0(
+        "(n = ",
+        barplot_sums["canonical_3", "sums"], ")"
+      ),
+      paste0(
+        "(n = ",
+        barplot_sums["canonical_4", "sums"], ")"
+      ),
+      paste0(
+        "(n = ",
+        barplot_sums["canonical_5", "sums"], ")"
+      )
+    )
+  ) +
+  theme(
+    axis.line = element_blank(), axis.ticks = element_blank(),
+    axis.text.y = element_blank()
+  )
+
+p_overview_2b <- ggplot() +
+  geom_bar(
+    data = barplot_data_cat %>% filter(
+      (cat == 3 | cat == 4 | cat == 5),
+      pep_type == "noncanonical"
+    ),
+    aes(x = cat, y = value, fill = fill_color, group = group),
+    stat = "identity"
+  ) +
+  scale_fill_identity() +
+  scale_y_continuous(name = element_blank(), expand = c(0, 0)) +
+  scale_x_discrete(
+    name = element_blank(), expand = c(0, 0),
+    labels = c(
+      paste0(
+        "(n = ",
+        barplot_sums["noncanonical_3", "sums"],
+        ")\nHLA class on\nwhich peptide\nwas detected"
+      ),
+      paste0(
+        "(n = ",
+        barplot_sums["noncanonical_4", "sums"],
+        ")\nPeptide length"
+      ),
+      paste0(
+        "(n = ",
+        barplot_sums["noncanonical_5", "sums"],
+        ")\n HLA typing\nknown"
+      )
+    )
+  ) +
+  theme(
+    axis.line = element_blank(), axis.ticks = element_blank(),
+    axis.text.y = element_blank()
+  )
+
+figure_s3a <- p_overview_1 + p_overview_2a +
+  plot_spacer() + p_overview_2b +
+  plot_layout(widths = c(2, 2))
+
+ggsave("Figure_S3A.svg",
+  device = "svg", path = plot_dir, figure_s3a,
+  width = 2000, height = 1300, units = "px"
+)
+```
+
+## Figure S3B - Classification on protein/ORF level
+```{r}
+# Link peptides to source ncORF/CDS
+pep_pro <- bind_rows(
+  pep_can %>%
+    semi_join(can_id, "protein_accession") %>%
+    distinct(peptide, protein_accession),
+  pep_nonc %>% distinct(peptide, protein_accession)
+)
+
+# Determine per CDS/ncORF the HLA class(es) on which peptides were detected
+protein_hla <- peptide_hla %>%
+  distinct(peptide, hla_class) %>%
+  inner_join(pep_pro, "peptide", relationship = "many-to-many") %>%
+  distinct(protein_accession, hla_class) %>%
+  group_by(protein_accession) %>%
+  summarise(
+    hla_class = ifelse(n_distinct(hla_class) == 2, "Both",
+      first(hla_class)
+    ),
+    .groups = "drop"
+  ) %>%
+  mutate(is_can = !str_detect(protein_accession, "CONTRIB_GENCODE")) %>%
+  dplyr::count(is_can, hla_class) %>%
+  mutate(hla_class = factor(hla_class, levels = c("I", "Both", "II")))
+
+figure_s3b1 <- ggplot(
+  protein_hla %>% filter(is_can),
+  aes(
+    x = "Canonical\nproteins", y = n,
+    fill = hla_class
+  )
+) +
+  geom_bar(stat = "identity", position = "stack", show.legend = FALSE) +
+  scale_x_discrete(expand = c(0, 0), name = "") +
+  scale_y_continuous(
+    expand = c(0, 0), name = "Number of canonical proteins",
+    labels = label_number(scale_cut = cut_short_scale())
+  ) +
+  scale_fill_manual(values = c(blue_col[1], grey_col[c(5, 3)]))
+
+
+figure_s3b2 <- ggplot(
+  protein_hla %>% filter(!is_can),
+  aes(
+    x = "Non-canonical\nORFs", y = n,
+    fill = hla_class
+  )
+) +
+  geom_bar(stat = "identity", position = "stack") +
+  scale_x_discrete(expand = c(0, 0), name = "") +
+  scale_y_continuous(
+    expand = c(0, 0), name = "Number of non-canonical ORFs",
+    labels = comma
+  ) +
+  scale_fill_manual(
+    values = c(blue_col[1], grey_col[c(5, 3)]),
+    name = element_blank(),
+    labels = c(
+      "Detected only in\nHLA-I MS-runs",
+      "Detected in both\nHLA-I and HLA-II MS-runs",
+      "Detected only in\nHLA-II MS-runs"
+    )
+  )
+
+figure_s3b <- figure_s3b1 + figure_s3b2
+```
+
+## Figure S3C - Classification by peptide length
+```{r}
+# Count peptides >14 aa and ≤ 14aa per HLA class for ncORF and CDS
+pep_class <- peptide_hla %>%
+  group_by(peptide, pep_type) %>%
+  filter(pep_type != "other") %>%
+  summarise(
+    hla_class = ifelse(n_distinct(hla_class) == 2, "Both",
+      first(hla_class)
+    ),
+    .groups = "drop"
+  ) %>%
+  mutate(pep_len = ifelse(nchar(peptide) > 14, ">14 aa", "≤ 14aa")) %>%
+  dplyr::count(hla_class, pep_type, pep_len) %>%
+  group_by(pep_type) %>%
+  mutate(
+    perc = n / sum(n) * 100,
+    hla_class = factor(hla_class, c("I", "Both", "II"))
+  )
+
+figure_s3c <- ggplot(
+  pep_class,
+  aes(hla_class, perc, group = pep_len, fill = pep_len)
+) +
+  geom_bar(stat = "identity") +
+  scale_x_discrete(
+    expand = c(0, 0),
+    name = "HLA class on which peptide is detected"
+  ) +
+  scale_y_continuous(
+    expand = c(0, 0), name = "Percentage of all peptides",
+    labels = label_percent(scale = 1)
+  ) +
+  scale_fill_manual(values = blue_col[c(6, 2)], name = "Peptide length") +
+  facet_wrap(~pep_type)
+```
+
+## Figure S3D - Graph length distribution per dataset
+```{r}
+# Determine relative length distribution split by HLA class
+peptide_lendis <- peptide_hla %>%
+  group_by(hla_class, dataset_id) %>%
+  mutate(p_count = n(), p_len = nchar(peptide)) %>%
+  group_by(dataset_id, hla_class, p_len, p_count) %>%
+  summarise(len_count = n(), .groups = "drop") %>%
+  mutate(len_count_f = len_count / p_count) %>%
+  mutate(dataset_hla = paste0(dataset_id, "__", hla_class))
+
+lendis_n <- peptide_lendis %>%
+  distinct(dataset_id, hla_class) %>%
+  dplyr::count(hla_class) %>%
+  deframe()
+
+figure_s3d <- ggplot(
+  data = peptide_lendis %>% filter(p_len <= 30),
+  aes(
+    x = p_len, y = len_count_f, group = dataset_hla,
+    color = hla_class
+  )
+) +
+  geom_line(linewidth = 0.25) +
+  geom_point(size = 0.5) +
+  scale_y_continuous(
+    expand = c(0, 0), limits = c(0, 0.8),
+    name = "Relative occurence"
+  ) +
+  scale_x_continuous(
+    expand = c(0, 0), limits = c(6.80, 30),
+    name = "Peptide length (aa)"
+  ) +
+  scale_color_manual(
+    values = c(blue_col[1], grey_col[3]), name = "HLA class",
+    labels = c(
+      paste0(
+        "HLA-I (n=", lendis_n["I"],
+        " dataset components)"
+      ),
+      paste0(
+        "HLA-II (n=", lendis_n["II"],
+        " dataset components)"
+      )
+    )
+  )
+```
+
+## Figure S3E - Compare HLA I vs II
+```{r}
+# Group peptides in those exclusively found in HLA-I or not
+orf_hlaclass <- pep_nonc %>%
+  mutate(hla_class = ifelse(hla_class == "I", "I", "II"))
+
+orf_hlaclass_count <- orf_hlaclass %>%
+  dplyr::count(hla_class, orf_biotype) %>%
+  group_by(hla_class) %>%
+  mutate(maxi = max(n)) %>%
+  ungroup() %>%
+  mutate(
+    # Scale values so that both sides of the axes will be the same length
+    scale_factor = max(maxi) / min(maxi),
+    orf_biotype = factor(orf_biotype,
+      levels = unique(orf_biotype[order(hla_class, n)])
+    ),
+    n_adj = ifelse(hla_class == "II", n * scale_factor, -n)
+  ) %>%
+  arrange(hla_class, -n)
+
+class_scale <- orf_hlaclass_count$scale_factor %>% first()
+
+hla_n <- orf_hlaclass_count %>%
+  dplyr::count(hla_class, wt = n) %>%
+  deframe()
+
+figure_s3e <-
+  ggplot(
+    orf_hlaclass_count,
+    aes(y = orf_biotype, x = n_adj, fill = hla_class)
+  ) +
+  geom_bar(stat = "identity", position = "identity", show.legend = FALSE) +
+  scale_x_continuous(
+    position = "top",
+    breaks = c(
+      -1250, -1000, -750, -500, -250, 0, 20 * class_scale,
+      40 * class_scale, 60 * class_scale, 80 * class_scale
+    ),
+    labels = c(1250, 1000, 750, 500, 250, 0, 20, 40, 60, 80),
+    limits = c(-1250, 1250),
+    expand = c(0, 0),
+    name = "# peptides of ORF biotype detected"
+  ) +
+  scale_y_discrete(name = element_blank()) +
+  scale_fill_manual(
+    values = c(blue_col[1], grey_col[5]),
+    labels = c(
+      paste0("HLA-I (n=", hla_n["I"], " peptides)"),
+      paste0("HLA-II (n=", hla_n["II"], " peptides)")
+    )
+  ) +
+  theme(axis.line.y = element_blank(), axis.ticks.y = element_blank())
+```
+
+## Figure S3F - Check HLA-II peptides
+
+```{r}
+# Determine HLA class(es) per dataset
+dataset_class <- annotations %>%
+  group_by(dataset_id) %>%
+  summarise(hla_class_dataset = ifelse(n_distinct(hla_class) == 2, "Both",
+    first(hla_class)
+  ))
+
+# Determine per peptide number of detections in HLA-I and HLA-II MS-runs
+hlaii_orf_peptides_count <- peptide_hla %>%
+  inner_join(
+    orf_hlaclass %>% filter(hla_class == "II") %>% distinct(peptide),
+    "peptide"
+  ) %>%
+  dplyr::count(peptide, hla_class, dataset_id) %>%
+  inner_join(dataset_class, "dataset_id") %>%
+  mutate(len = nchar(peptide)) %>%
+  group_by(peptide, hla_class) %>%
+  mutate(sum_n = sum(n)) %>%
+  group_by(hla_class) %>%
+  mutate(maxi = max(sum_n)) %>%
+  ungroup() %>%
+  mutate(
+    # Scale values so that both sides of the axes will be the same length
+    scale_factor = max(maxi) / min(maxi),
+    n = ifelse(hla_class == "II", n * scale_factor, -n),
+    peptide = factor(peptide,
+      levels =
+        rev(unique(peptide[order(hla_class, -sum_n)]))
+    )
+  ) %>%
+  group_by(peptide, hla_class, hla_class_dataset) %>%
+  mutate(color_num = row_number()) %>%
+  ungroup() %>%
+  mutate(color = case_when(
+    hla_class_dataset == "I" ~
+      as.character(color_num + 100),
+    hla_class_dataset == "II" ~
+      as.character(color_num + 200),
+    .default = as.character(color_num + 300)
+  ))
+
+# Map colors to alternate colors of adjacent bars
+hla_color_mapping <- hlaii_orf_peptides_count %>%
+  distinct(color) %>%
+  arrange(color) %>%
+  mutate(
+    color_int = as.integer(color),
+    color_hex = case_when(
+      color_int < 200 & (color_int %% 2 == 0) ~ blue_col[1],
+      color_int < 200 & (color_int %% 2 == 1) ~ blue_col[4],
+      color_int < 300 & (color_int %% 2 == 0) ~ grey_col[1],
+      color_int < 300 & (color_int %% 2 == 1) ~ grey_col[4],
+      color_int %% 2 == 0 ~ pink_col[1],
+      color_int %% 2 == 1 ~ pink_col[4],
+      .default = NA
+    )
+  )
+
+pep_len_mapping <- hlaii_orf_peptides_count %>%
+  arrange(peptide) %>%
+  distinct(peptide, len)
+
+hla_ii_scale <- hlaii_orf_peptides_count$scale_factor %>% unique()
+
+detection_count <- hlaii_orf_peptides_count %>%
+  distinct(peptide, sum_n, hla_class) %>%
+  dplyr::count(hla_class, wt = sum_n) %>%
+  mutate(n = formatC(n, big.mark = ",")) %>%
+  deframe()
+
+figure_s3f <- ggplot(
+  hlaii_orf_peptides_count,
+  aes(y = peptide, x = n, fill = color)
+) +
+  geom_bar(stat = "identity", show.legend = FALSE) +
+  scale_fill_manual(
+    breaks = hla_color_mapping$color,
+    values = hla_color_mapping$color_hex
+  ) +
+  geom_vline(aes(xintercept = 0)) +
+  scale_y_discrete(
+    labels = pep_len_mapping$len, guide = guide_axis(n.dodge = 2),
+    name = paste0("Peptides (n = ", nrow(pep_len_mapping), ")")
+  ) +
+  scale_x_continuous(
+    position = "top",
+    breaks = c(
+      -600, -400, -200, 0, 20 * hla_ii_scale,
+      40 * hla_ii_scale, 60 * hla_ii_scale
+    ),
+    labels = c(600, 400, 200, 0, 20, 40, 60),
+    limits = c(-60 * hla_ii_scale, 60 * hla_ii_scale),
+    expand = c(0, 0),
+    name = paste0(
+      "Number of peptide detections per dataset\n",
+      "On HLA-I (n = ", detection_count["I"], ") ",
+      "On HLA-II (n = ", detection_count["II"], ")"
+    )
+  )
+```
+
+## Figure S3B-F - Combine
+
+```{r}
+figure_s3bf <- figure_s3b + figure_s3c + figure_s3d + figure_s3e +
+  free(figure_s3f) +
+  plot_layout(
+    design = "ABFFF\nCCFFF\nDDFFF\nEEFFF",
+    guides = "collect"
+  )
+
+ggsave("figure_S3BF.svg",
+  device = "svg", path = plot_dir, figure_s3bf,
+  width = 3200, height = 2500, units = "px"
+)
+```
+
+# Figure S4 - ORF statistics
+## Figure S4A-D - ORF overview
+```{r}
+# Determine percentage detected ncORFs per biotype
+orf_pep_stats_ref <- orf_pep_stats %>%
+  mutate(is_det = n_pep >= 1) %>%
+  dplyr::count(orf_biotype, is_det) %>%
+  mutate(mean_perc = sum(n[which(is_det)]) / sum(n)) %>%
+  group_by(orf_biotype) %>%
+  mutate(
+    total = sum(n),
+    perc = n / total
+  ) %>%
+  rowwise() %>%
+  mutate(
+    conf_low = ifelse(is_det, binom.test(n, total)$conf.int[1], NA),
+    conf_high = ifelse(is_det, binom.test(n, total)$conf.int[2], NA),
+    p_val = ifelse(is_det, binom.test(n, total, p = mean_perc)$p.value,
+      NA
+    )
+  ) %>%
+  ungroup() %>%
+  mutate(p_adj = p.adjust(p_val, method = "holm"))
+
+# Determine percentage detected ncORFs per length category
+orf_pep_stats_len <- orf_pep_stats %>%
+  mutate(is_det = n_pep > 0) %>%
+  mutate(len_cat = cut(orf_len,
+    breaks = c(15, 30, 50, 75, 100, Inf),
+    labels = c("16-30", "31-50", "51-75", "76-100", ">100")
+  )) %>%
+  dplyr::count(len_cat, is_det) %>%
+  group_by(len_cat) %>%
+  mutate(total = sum(n)) %>%
+  rowwise() %>%
+  mutate(
+    perc = n / total,
+    conf_low = ifelse(is_det, binom.test(n, total)$conf.int[1], NA),
+    conf_high = ifelse(is_det, binom.test(n, total)$conf.int[2], NA)
+  )
+
+# Determine enrichment in detecteability for longer ncORFs
+orf_len_enrichment <- orf_pep_stats_len %>%
+  filter(is_det) %>%
+  mutate(cat = ifelse(len_cat == "16-30", "low", "high")) %>%
+  group_by(cat) %>%
+  summarise(perc = sum(n) / sum(total) * 100) %>%
+  pivot_wider(names_from = cat, values_from = perc) %>%
+  mutate(enrichment = (high - low) / high)
+
+figure_s4a <- ggplot(
+  orf_pep_stats_ref,
+  aes(fill = is_det, y = n, x = orf_biotype)
+) +
+  geom_bar(position = "stack", stat = "identity", show.legend = FALSE) +
+  scale_x_discrete(name = element_blank(), expand = c(0, 0)) +
+  scale_y_continuous(name = "Number of non-canonical ORFs", expand = c(0, 0)) +
+  scale_fill_manual(values = green_col[c(4, 1)]) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+figure_s4b <- ggplot(
+  orf_pep_stats_ref,
+  aes(fill = is_det, y = perc, x = orf_biotype)
+) +
+  geom_bar(position = "stack", stat = "identity", show.legend = FALSE) +
+  scale_x_discrete(name = element_blank(), expand = c(0, 0)) +
+  scale_y_continuous(
+    name = "Percentage of non-canonical ORFs",
+    expand = c(0, 0),
+    labels = label_percent()
+  ) +
+  scale_fill_manual(values = green_col[c(4, 1)]) +
+  geom_linerange(aes(ymin = conf_low, ymax = conf_high)) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+figure_s4c <- ggplot(
+  orf_pep_stats_len,
+  aes(fill = is_det, y = n, x = len_cat)
+) +
+  geom_bar(position = "stack", stat = "identity", show.legend = FALSE) +
+  scale_x_discrete(name = "Orf length (aa)", expand = c(0, 0)) +
+  scale_y_continuous(name = "Number of non-canonical ORFs", expand = c(0, 0)) +
+  scale_fill_manual(values = green_col[c(4, 1)]) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+figure_s4d <- ggplot(
+  orf_pep_stats_len,
+  aes(fill = is_det, y = perc, x = len_cat)
+) +
+  geom_bar(position = "stack", stat = "identity", show.legend = FALSE) +
+  scale_x_discrete(name = "Orf length (aa)", expand = c(0, 0)) +
+  scale_y_continuous(
+    name = "Percentage of non-canonical ORFs", expand = c(0, 0),
+    labels = label_percent()
+  ) +
+  scale_fill_manual(values = green_col[c(4, 1)]) +
+  geom_linerange(aes(ymin = conf_low, ymax = conf_high)) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+figure_s4ad <- figure_s4a + figure_s4b + figure_s4c + figure_s4d +
+  plot_layout(nrow = 1)
+
+ggsave("Figure_S4AD.svg",
+  device = "svg", path = plot_dir, figure_s4ad,
+  width = 2340, height = 1000, units = "px"
+)
+```
+
+## Figure S4E - Compare cancer vs non-cancer with cancer genes
+```{r}
+cancer_census <- read_csv(cancer_census_file)
+colnames(cancer_census) <- str_replace_all(colnames(cancer_census), " ", "_")
+
+# Merge orf data with cancer census data
+orf_gene <- orf_sequences %>%
+  select(-protein) %>%
+  left_join(
+    cancer_census %>%
+      distinct(Gene_Symbol, Role_in_Cancer) %>%
+      mutate(is_cancergene = TRUE),
+    c("gene_name" = "Gene_Symbol")
+  )
+
+# Determine per peptide whether it is found in cancer samples or originates
+#  from a cancer gene
+orf_cancer <- peptide_hla %>%
+  inner_join(pep_nonc, "peptide", relationship = "many-to-many") %>%
+  left_join(orf_gene, c("orf_name", "orf_biotype")) %>%
+  distinct(peptide, is_cancer, orf_biotype, is_cancergene) %>%
+  group_by(peptide, orf_biotype, is_cancergene) %>%
+  summarise(
+    is_cancer = ifelse(n() > 1, "Both", first(is_cancer)),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    is_cancergene = ifelse(is.na(is_cancergene), FALSE, TRUE),
+    is_cancer = factor(is_cancer,
+      levels = c("Cancer", "Both", "Non-cancer")
+    )
+  )
+
+# Determine counts per cancercategory and orf biotype
+orf_cancer_count <- orf_cancer %>%
+  dplyr::count(is_cancer, orf_biotype, is_cancergene) %>%
+  group_by(is_cancer) %>%
+  mutate(
+    orf_biotype = str_replace_all(orf_biotype, " ", "\n"),
+    total = sum(n),
+    perc = n / total * 100,
+    orf_biotype = factor(orf_biotype,
+      levels = unique(orf_biotype[order(is_cancer, -perc)])
+    )
+  ) %>%
+  group_by(is_cancer, orf_biotype) %>%
+  mutate(sumn = sum(n)) %>%
+  rowwise() %>%
+  mutate(
+    conf_low = ifelse(!is_cancergene,
+      binom.test(sumn, total)$conf.int[1] * 100, NA
+    ),
+    conf_high = ifelse(!is_cancergene,
+      binom.test(sumn, total)$conf.int[2] * 100, NA
+    ),
+    color = case_when(
+      is_cancergene ~ red_col,
+      is_cancer == "Cancer" ~ blue_col[2],
+      is_cancer == "Non-cancer" ~ blue_col[6],
+      TRUE ~ grey_col[4]
+    ) %>% factor(levels = c(blue_col[2], blue_col[6], grey_col[4], red_col)),
+    x_axis = paste0(orf_biotype, is_cancer)
+  ) %>%
+  arrange(orf_biotype, is_cancer) %>%
+  mutate(x_axis = factor(x_axis, levels = unique(x_axis)))
+
+cancer_x_labels <- orf_cancer_count %>%
+  filter(is_cancer == "Both") %>%
+  arrange(orf_biotype) %>%
+  distinct(x_axis, orf_biotype)
+
+cancer_counts <- orf_cancer_count %>%
+  ungroup() %>%
+  distinct(is_cancer, total) %>%
+  mutate(total = paste0("(n = ", total, " peptides)")) %>%
+  deframe()
+
+cancergene_count <- orf_cancer_count %>%
+  filter(is_cancergene) %>%
+  pull(n) %>%
+  sum() %>%
+  paste0("(n = ", ., " peptides)")
+
+figure_s4e <-
+  ggplot(orf_cancer_count, aes(x = x_axis, y = perc, fill = color)) +
+  geom_bar(stat = "identity", position = "stack") +
+  scale_fill_identity(
+    guide = "legend",
+    breaks = c(blue_col[2], grey_col[4], blue_col[6], red_col),
+    labels = c(
+      paste0("Cancer\n", cancer_counts["Cancer"]),
+      paste0("Both\n", cancer_counts["Both"]),
+      paste0("Non-cancer\n(", cancer_counts["Non-cancer"]),
+      paste0("Peptide from ORF\nlocated at cancergene\n", cancergene_count)
+    ),
+    name = "Sample type in which\npeptide was detected"
+  ) +
+  scale_y_continuous(
+    expand = c(0, 0), name = "% of ORF biotype detected",
+    labels = label_percent(scale = 1)
+  ) +
+  scale_x_discrete(
+    expand = c(0, 0), name = element_blank(),
+    breaks = cancer_x_labels$x_axis,
+    labels = cancer_x_labels$orf_biotype
+  ) +
+  facet_grid(~orf_biotype, scales = "free") +
+  geom_linerange(aes(ymin = conf_low, ymax = conf_high)) +
+  theme(
+    axis.text.x = element_text(angle = 60, hjust = 1),
+    strip.text.x = element_blank()
+  )
+
+ggsave("Figure_S4E.svg",
+  device = "svg", path = plot_dir, figure_s4e,
+  width = 1400, height = 1200, units = "px"
+)
+```
+
+## Figure S4F - Compare on peptide level
+```{r}
+neworf_cancer <- orf_cancer %>%
+  distinct(peptide, is_cancer) %>%
+  # Rename for function get_stats
+  dplyr::rename(protein = peptide) %>%
+  get_stats() %>%
+  dplyr::rename(peptide = protein) %>%
+  mutate(weight = mw(peptide) / len)
+
+figure_s4f1 <- create_dis_plot(
+  ggplot(
+    neworf_cancer,
+    aes(x = len, color = is_cancer)
+  ),
+  "Peptide length", cancer_colors
+)
+
+figure_s4f2 <- create_dis_plot(
+  ggplot(
+    neworf_cancer,
+    aes(x = weight, color = is_cancer)
+  ),
+  "Mean mass per amino acid (u)", cancer_colors,
+  y_name = element_blank()
+)
+
+figure_s4f3 <- create_dis_plot(
+  ggplot(
+    neworf_cancer,
+    aes(x = hydro, color = is_cancer)
+  ),
+  "Hydrophobicity (Kyte-Doolittle)", cancer_colors
+)
+
+figure_s4f4 <- create_dis_plot(
+  ggplot(
+    neworf_cancer,
+    aes(x = pi, color = is_cancer)
+  ),
+  "Isoelectric point", cancer_colors,
+  y_name = element_blank()
+)
+
+figure_s4f <- wrap_plots(
+  list(figure_s4f1, figure_s4f2, figure_s4f3, figure_s4f4),
+  ncol = 2, nrow = 2
+)
+
+ggsave("Figure_S4F.svg",
+  device = "svg", path = plot_dir, figure_s4f,
+  width = 1200, height = 1200, units = "px"
+)
+```
+
+# Figure S5 - Hydrophobicity and expression
+## Figure S5C - Hydrophobicity at ncORF ends
+```{r}
+h_lab <- "Hydrophobicity\n(Kyte-Doolittle)"
+h_cats <- c("Non-canonical__start", "Non-canonical__end")
+
+# Get p-values for comparisons adjusten using Holm-Bonferoni method
+p_vals_start_end <-
+  inner_join(
+    seq_stats_properties %>%
+      filter(pro_cat == h_cats[1]) %>%
+      select(hydro, detected, protein_accession) %>%
+      dplyr::rename(start = hydro),
+    seq_stats_properties %>%
+      filter(pro_cat == h_cats[2]) %>%
+      select(hydro, detected, protein_accession) %>%
+      dplyr::rename(end = hydro),
+    c("protein_accession", "detected")
+  ) %>%
+  select(-protein_accession) %>%
+  get_pvals_holms() %>%
+  arrange(desc(name))
+
+figure_s5c_plots <- lapply(1:2, function(i) {
+  cat <- h_cats[i]
+  plot_data <- seq_stats_properties %>%
+    filter(pro_cat == cat) %>%
+    mutate(y_val = hydro)
+  p_val <- p_vals_start_end$value
+  create_violin(plot_data, h_lab, p_val, c(-4.1, 2.5),
+    n_colors = c((4 * i - 3):(4 * i - 2))
+  )
+})
+
+figure_s5c_plots[[2]] <- figure_s5c_plots[[2]] + remove_y
+figure_s5c <- wrap_plots(figure_s5c_plots, ncol = 2)
+
+ggsave("Figure_S5C.svg",
+  device = "svg", path = plot_dir, figure_s5c,
+  width = 600, height = 300, units = "px"
+)
+```
+
+## Figure S5D - Hydrophobicity per biotype
+```{r}
+# Group seq_stats_hydro by CDS and ncORF biotype
+seq_stats_hydro_biotype <- seq_stats_hydro %>%
+  group_by(orf_biotype, c_offset, detected) %>%
+  mutate(
+    low_conf = t.test(hydro)$conf.int[1],
+    high_conf = t.test(hydro)$conf.int[2]
+  ) %>%
+  summarise(
+    hydro = mean(hydro), low_conf = first(low_conf),
+    high_conf = first(high_conf)
+  ) %>%
+  mutate(orf_biotype = factor(orf_biotype,
+    levels = c(
+      "CDS", "uORFs", "uoORFs", "intORFs",
+      "doORFs", "dORFs", "lncRNA ORFs",
+      "Processed transcript ORFs"
+    )
+  ))
+
+figure_s5d <- ggplot(
+  seq_stats_hydro_biotype,
+  aes(x = c_offset, y = hydro, group = detected)
+) +
+  geom_linerange(aes(ymin = low_conf, ymax = high_conf, color = detected),
+    alpha = 0.5, linewidth = 0.3
+  ) +
+  geom_point(mapping = aes(color = detected), size = .2) +
+  geom_smooth(
+    method = "loess", formula = y ~ x, se = FALSE,
+    mapping = aes(color = detected), linewidth = .7
+  ) +
+  scale_x_continuous(
+    expand = c(0, 0),
+    name = "Position relative to C-terminus"
+  ) +
+  scale_y_continuous(
+    limits = c(-3.8, 2.6), expand = c(0, 0),
+    name = "Hydrophobicity\n(Kyte-Doolittle)"
+  ) +
+  scale_color_manual(values = c(green_col[1], blue_col[2])) +
+  facet_wrap(~orf_biotype, ncol = 4)
+
+ggsave("figure_S5D.svg",
+  device = "svg", path = plot_dir, figure_s5d,
+  width = 2516.16, height = 900, units = "px"
+)
+```
+
+## Figure S5E - Expression per biotype
+```{r}
+orf_gtex_split <- orf_gtex %>%
+  make_biotype_levels() %>%
+  split(~orf_biotype)
+
+gtex_violins_pvals <- sapply(names(orf_gtex_split), function(i) {
+  p_val <- perform_wtest(orf_gtex_split[[i]])
+}) %>%
+  p.adjust(method = "holm") %>%
+  sapply(format_pval)
+
+gtex_violins <- lapply(names(orf_gtex_split), function(i) {
+  p_val <- gtex_violins_pvals[i]
+  expression_violin <- create_violin(orf_gtex_split[[i]],
+    "Mean FPKM of gene\nexpressing ncORF in GTEx", p_val, c(0, 1600),
+    n_colors = c(3, 4), pseudo_log = TRUE, x_label = i,
+    y_breaks = c(0, 10, 250, 500, 1000, 2000)
+  )
+})
+
+gtex_violins_f <- lapply(1:7, function(i) {
+  one_plot <- gtex_violins[[i]]
+  if (i > 1) {
+    one_plot <- one_plot + remove_y
+  }
+  return(one_plot)
+})
+
+figure_s5e <- wrap_plots(gtex_violins_f, nrow = 1)
+
+ggsave("figure_S5E.svg",
+  device = "svg", path = plot_dir, figure_s5e,
+  width = 2300, height = 600, units = "px"
+)
+```
+
+## Figure S5F - Expression per tissue
+```{r}
+# Process GTEX data to longer format with improved names
+gtex_tissue <- gtex_data %>%
+  dplyr::rename(gene_id = X) %>%
+  pivot_longer(-gene_id) %>%
+  dplyr::rename(tissue_raw = name, fpkm = value) %>%
+  mutate(
+    tissue = str_replace_all(str_extract(tissue_raw, "^\\w+"), "_", " "),
+    tissue = case_when(
+      tissue == "Adipose" ~ "Adipose Tissue",
+      tissue == "Artery" ~ "Blood Vessel",
+      tissue_raw == "Cells.EBV_transf.lymphocytes" ~ "Blood",
+      tissue_raw == "Cells.transformed_fibroblasts" ~ "Skin",
+      tissue == "FallopianTube" ~ "Fallopian Tube",
+      tissue == "Minor Salivary Gland" ~ "Salivary Gland",
+      tissue == "Whole Blood" ~ "Blood",
+      TRUE ~ tissue
+    )
+  ) %>%
+  group_by(tissue, gene_id) %>%
+  summarise(fpkm = mean(fpkm))
+
+# Combine GTEX expression per biotype with ncORF genes
+orf_gtex_tissue <-
+  seq_stats %>%
+  inner_join(orf_sequences %>%
+               select(protein_accession, gene_id), "protein_accession") %>%
+  inner_join(gtex_tissue, "gene_id", relationship = "many-to-many")
+
+# Statistical test per tissue, print highest p-value for reporting
+p_tissue <- orf_gtex_tissue %>%
+  mutate(y_val = fpkm) %>%
+  split(~tissue) %>%
+  sapply(perform_wtest) %>%
+  p.adjust(method = "holm")
+max(p_tissue)
+
+figure_s5f <- ggplot(orf_gtex_tissue, aes(detected, fpkm, color = detected)) +
+  geom_boxplot(outliers = FALSE) +
+  scale_y_continuous(
+    trans = scales::pseudo_log_trans(base = 10),
+    breaks = c(0, 2, 10, 50, 250),
+    name = "Mean FPKM of gene\nexpressing ncORF in GTEx"
+  ) +
+  scale_x_discrete(labels = c(), name = element_blank()) +
+  facet_wrap(~tissue, nrow = 1) +
+  scale_color_manual(values = green_col[c(1, 4)])
+
+ggsave("Figure_S5F.svg",
+  device = "svg", path = plot_dir, figure_s5f,
+  width = 2300, height = 600, units = "px"
+)
+```
