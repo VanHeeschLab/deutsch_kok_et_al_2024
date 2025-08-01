@@ -1,0 +1,163 @@
+---
+title: "Script to determine number of ncORFs per tier and how many are peptideins"
+output: html_document
+author: "Leron Kok"
+---
+
+# Pre-processing
+## Declare libraries
+```{r}
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(here)
+})
+```
+
+## Load required data and define directories and files
+```{r}
+source("load_tables.R")
+source("load_plot_aesthetics.R")
+
+processed_dir <- here("processed")
+plot_dir <- file.path(processed_dir, "plots")
+
+# Peptidein annotation file
+table_s12_file <- file.path(raw_dir, "20250801_VanHeesch_EDtable12.xlsx")
+```
+
+# Figure 5 - Tiers and peptideins
+## Figure 5B - Tier assignment
+```{r}
+tiers <- nonhla_orf_table %>%
+  select(orf_name, initial_tier, final_tier) %>%
+  bind_rows(hla_orf_table %>%
+              select(orf_name, initial_tier, final_tier)) %>%
+  mutate(
+    initial_tier = str_replace(initial_tier, " - .+", ""),
+    final_tier = str_replace(final_tier, " - .+", ""),
+    final_tier = str_replace(final_tier, ",.+", "")
+  ) %>%
+  distinct(orf_name, initial_tier, final_tier) %>%
+  right_join(orf_sequences %>%
+               select(orf_name), "orf_name") %>%
+  replace_na(list(initial_tier = "Tier 4", final_tier = "Tier 4")) %>%
+  mutate(
+    initial_tier =
+      factor(initial_tier, levels = c(
+        "Tier 1A", "Tier 1B", "Tier 2A",
+        "Tier 2B", "Tier 3", "Tier 4"
+      )),
+    final_tier =
+      factor(final_tier, levels = c(
+        "Tier 4", "Tier 3", "Tier 2B", "Tier 2A",
+        "Tier 1B", "Tier 1A"
+      ))
+  )
+
+tier_counts <- tiers %>%
+  dplyr::count(initial_tier, final_tier) %>%
+  mutate(n = format(n, big.mark = ","))
+
+figure_5b <- ggplot() +
+  geom_tile(
+    data = tier_counts, aes(initial_tier, final_tier),
+    color = "black", fill = "white"
+  ) +
+  geom_text(
+    data = tier_counts, aes(initial_tier, final_tier, label = n),
+    size = 7 / .pt
+  ) +
+  scale_x_discrete(position = "top", name = "Provisional tier") +
+  scale_y_discrete(name = "Final tier") +
+  geom_text(
+    data = tiers %>%
+      dplyr::count(initial_tier) %>%
+      mutate(n = format(n, big.mark = ",")),
+    aes(x = initial_tier, y = 0.3, label = n), size = 7 / .pt,
+    fontface = "bold"
+  ) +
+  geom_text(
+    data = tiers %>%
+      dplyr::count(final_tier) %>%
+      mutate(n = format(n, big.mark = ",")),
+    aes(x = 5.6, y = final_tier, label = n), size = 7 / .pt, hjust = 0,
+    fontface = "bold"
+  ) +
+  theme(
+    axis.line = element_blank(),
+    axis.ticks = element_blank(),
+    axis.title = element_text(face = "bold"),
+    axis.text = element_text(face = "bold")
+  ) +
+  coord_cartesian(clip = "off", expand = FALSE)
+
+ggsave("Figure_5B.svg",
+  device = "svg", path = plot_dir, figure_5b,
+  width = 1000, height = 500, units = "px"
+)
+```
+
+## Figure 5C - Tier 1A breakdown
+```{r}
+data_5c <- tiers %>%
+  filter(initial_tier == "Tier 1A") %>%
+  mutate(
+    final_tier = ifelse(is.na(final_tier) | final_tier == "Tier 3",
+      "Tier 1A", as.character(final_tier)
+    ),
+    final_tier =
+      factor(final_tier, levels = c(
+        "Tier 1B", "Tier 2A",
+        "Tier 2B", "Tier 4", "Tier 1A"
+      ))
+  ) %>%
+  dplyr::count(final_tier)
+
+figure_5c <- ggplot(data_5c, aes(x = "", y = n, fill = final_tier)) +
+  geom_bar(stat = "identity", width = 1, color = "white", show.legend = FALSE) +
+  coord_polar("y", start = 0, direction = 1) +
+  theme_void() +
+  scale_fill_manual(values = c(
+    "#B9B1A4", "#C8C1B7", "#D8D3CC", pink_col[4],
+    green_col[4]
+  ))
+
+ggsave("Figure_5c.svg",
+  device = "svg", path = plot_dir, figure_5c,
+  width = 900, height = 900, units = "px"
+)
+```
+
+## Figure 5E - Peptidein counts
+```{r}
+peptidein_table <- read_excel(table_s12_file) %>%
+  dplyr::rename(orf_name = "Ribo-Seq_ORF",
+                final_tier = "Final.tier.for.level.of.evidence") %>%
+  mutate(category = case_when(
+    str_detect(`annotation decision`, "protein") ~ "Protein",
+    str_detect(`annotation decision`, "peptidein") ~ "Peptidein",
+    .default = "other"
+  ))
+
+tier_peptidein <- tiers %>%
+  left_join(
+    hla_orf_table %>% select(orf_name, n_peptides_in_entry),
+    "orf_name"
+  ) %>%
+  left_join(
+    peptidein_table %>% select(
+      orf_name, category,
+      `non-HLA peptides`, `HLA peptides`
+    ),
+    "orf_name"
+  ) %>%
+  replace_na(list(n_peptides_in_entry = 0))
+
+tier_peptidein %>%
+  filter(!is.na(category)) %>%
+  dplyr::count(final_tier, category)
+
+tier_peptidein %>%
+  filter(category == "Peptidein") %>%
+  dplyr::count(`non-HLA peptides`, `HLA peptides`, category)
+```
