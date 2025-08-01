@@ -1,0 +1,287 @@
+---
+title: "Script to create figures related to the structure predictions"
+output: html_document
+author: "Leron Kok"
+---
+
+# Pre-processing
+## Declare libraries
+```{r}
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(here)
+  library(patchwork)
+  library(ggpubr)
+  library(ggbeeswarm)
+  library(scales)
+  library(grid)
+})
+```
+
+## Load required data and define directories and files
+```{r}
+utils::globalVariables(c("tier"))
+source("load_tables.R")
+source("load_plot_aesthetics.R")
+
+processed_dir <- here("processed")
+plot_dir <- file.path(processed_dir, "plots")
+struct_file <- file.path(raw_dir, "20250801_VanHeesch_EDtable14.xlsx")
+
+# Load structure prediction data for each ncORF
+struct_df <- read_xlsx(struct_file, sheet = 1) %>%
+  mutate(
+    orf_len = nchar(sequence),
+    cov_disorder_elm = cov_disordered / orf_len
+  )
+
+tier_colors <- c(
+  blue_col[1], green_col[1], blue_col[6],
+  green_col[6], pink_col[2], pink_col[5]
+)
+
+# Load AlphaFold results for the shuffled sequences
+alpha_reshuffle <- read_xlsx(struct_file, sheet = 2)
+```
+
+## Define functions
+```{r}
+create_structure_violin <- function(df, y_val, y_lab, y_lim = c(NA, NA),
+                                    y_breaks = waiver(), log = FALSE) {
+  # Create violin plots diplaying the variable y_val for each Tier
+  #
+  # Args:
+  #   df: dataframe with the data to plot
+  #   y_val: string with the column name in df to be used as y-variable
+  #   y_lim: array with y-axis limits, default is ggplot default
+  #   y_breaks: y-axis breaks, default is ggplot default
+  #   log: whether to use log-scale for y-axis, default is FALSE
+  #
+  # Returns:
+  #   ggplot object of the violin plot
+  p <- ggplot(df, aes(tier, !!sym(y_val), group = tier)) +
+    geom_violin(trim = TRUE, show.legend = FALSE, mapping = aes(fill = tier)) +
+    geom_boxplot(fill = "transparent", outlier.shape = NA) +
+    scale_x_discrete(
+      name = element_blank(),
+      expand = c(0, 0)
+    ) +
+    scale_fill_manual(values = c(
+      blue_col[1], green_col[1],
+      blue_col[6], green_col[6],
+      pink_col[2], pink_col[5]
+    )) +
+    geom_pwc(
+      label = "p.adj.signif",
+      method = "wilcox.test",
+      p.adjust.method = "fdr",
+      hide.ns = TRUE
+    ) +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+  if (!log) {
+    p <- p +
+      scale_y_continuous(
+        name = y_lab,
+        limits = y_lim,
+        breaks = y_breaks,
+        labels = label_comma(),
+        expand = c(0, 0)
+      )
+  } else {
+    p <- p +
+      scale_y_log10(
+        name = y_lab,
+        limits = y_lim,
+        breaks = y_breaks,
+        labels = label_comma(),
+        expand = c(0, 0)
+      )
+  }
+  return(p)
+}
+```
+
+# Figure S12 - Structure predictions
+## Figure S12a-d - Length and pLDDT
+```{r}
+figure_s12a <- struct_df %>%
+  create_structure_violin("length", "ncORF length (aa)",
+    y_breaks = c(16, 30, 100, 300, 1000), log = TRUE
+  )
+
+figure_s12bd <- struct_df %>%
+  select(plddt_esmfold, plddt_alphafold, plddt_omegafold, tier) %>%
+  pivot_longer(-tier) %>%
+  mutate(name = case_match(
+    name,
+    "plddt_esmfold" ~ "pLDDT ESMFold",
+    "plddt_alphafold" ~ "pLDDT AlphaFold 3",
+    "plddt_omegafold" ~ "pLDDT OmegaFold"
+  )) %>%
+  split(~name) %>%
+  lapply(function(df) {
+    create_structure_violin(df, "value", df$name[1], 200, seq(0, 100, 25))
+  })
+
+figure_s12ad <- figure_s12a + figure_s12bd + plot_layout(nrow = 1)
+
+ggsave("figure_S12ad.svg",
+  device = "svg", path = plot_dir, figure_s12ad,
+  width = 190, height = 90, units = "mm"
+)
+```
+
+## Figure S12e-f - Shuffled sequences
+```{r}
+figure_s12e <- struct_df %>%
+  select(plddt_alphafold) %>%
+  filter(plddt_alphafold > 90) %>%
+  mutate(cat = "ncORF") %>%
+  bind_rows(alpha_reshuffle %>%
+              select(plddt_alphafold) %>%
+              mutate(cat = "shuffle")) %>%
+  {
+    x_counts <- dplyr::count(., cat) %>%
+      mutate(n = format(n, big.mark = ",")) %>%
+      deframe()
+    xlabs <- c(
+      paste0(
+        "Translated ncORFs\nwith pLDDT > 90\n(n = ",
+        x_counts["ncORF"], ")"
+      ),
+      paste0(
+        "Shuffled ncORF\nsequences\n(n = ",
+        x_counts["shuffle"], ")"
+      )
+    )
+    ggplot(., aes(cat, plddt_alphafold)) +
+      geom_violin(trim = TRUE, show.legend = FALSE, mapping = aes(fill = cat)) +
+      geom_boxplot(fill = "transparent", outlier.shape = NA) +
+      scale_x_discrete(
+        name = element_blank(),
+        labels = xlabs,
+        expand = c(0, 0)
+      ) +
+      scale_y_continuous(
+        name = "pLDDT AlphaFold 3",
+        limits = c(25, 100),
+        breaks = seq(25, 100, 25),
+        expand = c(0, 0)
+      ) +
+      scale_fill_manual(values = c(purple_col[1], grey_col[6]))
+  }
+
+figure_s12f <- ggplot(struct_df, aes(plddt_alphafold, length)) +
+  geom_point() +
+  scale_x_continuous("pLDDT AlphaFold 3") +
+  scale_y_log10("ncORF length (aa)") +
+  geom_smooth(
+    method = "loess",
+    formula = y ~ x,
+    color = red_col
+  ) +
+  annotation_custom(grobTree(textGrob(
+    "n = 7,264 ncORFs",
+    x = 0.02, y = 0.04, hjust = 0,
+    gp = gpar(fontsize = 7)
+  )))
+
+figure_s12g <- alpha_reshuffle %>%
+  group_by(original_orf_id) %>%
+  summarise(
+    `pLDDT > 80` = sum(plddt_alphafold > 80),
+    `pLDDT > 90` = sum(plddt_alphafold > 90)
+  ) %>%
+  pivot_longer(-original_orf_id) %>%
+  dplyr::count(name, value) %>%
+  mutate(value = factor(value, 0:5)) %>%
+  ggplot(aes(name, n, fill = value)) +
+  geom_bar(stat = "identity") +
+  scale_x_discrete(
+    name = element_blank(),
+    expand = c(0, 0)
+  ) +
+  scale_y_continuous(
+    name = "Frequency",
+    expand = c(0, 0)
+  ) +
+  scale_fill_manual(
+    values = c(
+      "#EBCF2EFF", "#B4BF3AFF", "#88AB38FF",
+      "#5E9432FF", "#3B7D31FF", "#225F2FFF"
+    ),
+    name = "Number of\nshuffled ncORF\nsequences"
+  )
+
+figure_s12eg <- figure_s12e + figure_s12f + figure_s12g +
+  plot_layout(nrow = 1, widths = c(1, 2, 1))
+
+ggsave("figure_S12eg.svg",
+  device = "svg", path = plot_dir, figure_s12eg,
+  width = 220, height = 60, units = "mm"
+)
+```
+
+## Figure S12h-j - Shuffled sequences and ELM
+```{r}
+figure_s12h <- struct_df %>%
+  select(plddt_alphafold, orf_id) %>%
+  filter(plddt_alphafold > 90) %>%
+  mutate(cat = "ncORF") %>%
+  bind_rows(alpha_reshuffle %>%
+              select(plddt_alphafold, orf_id = original_orf_id) %>%
+              mutate(cat = "shuffle")) %>%
+  group_by(orf_id) %>%
+  filter(sum(plddt_alphafold > 90) == 1) %>%
+  mutate(
+    orf_label = ifelse(sum(plddt_alphafold > 80) == 1,
+      paste0("**", orf_id, "**"), orf_id
+    ),
+    label_color = ifelse(str_detect(orf_label, "[*]"), "black",
+      grey_col[1]
+    )
+  ) %>%
+  ungroup() %>%
+  arrange(-plddt_alphafold) %>%
+  mutate(orf_label = factor(orf_label, rev(unique(orf_label)))) %>%
+  arrange(orf_label) %>%
+  {
+    ggplot(., aes(plddt_alphafold, orf_label, color = cat)) +
+      geom_vline(xintercept = c(80, 90), linetype = "dashed") +
+      geom_point() +
+      scale_x_continuous(
+        name = "pLDDT AlphaFold 3",
+        limits = c(NA, 100)
+      ) +
+      scale_y_discrete(name = element_blank()) +
+      scale_color_manual(
+        name = element_blank(),
+        labels = c("Translated ncORF", "Shuffled ncORF"),
+        values = c(purple_col[1], grey_col[6])
+      ) +
+      theme(
+        axis.text.y = ggtext::element_markdown(
+          color = filter(., cat == "ncORF") %>% pull(label_color)
+        ),
+        legend.position = "bottom"
+      )
+  }
+
+figure_s12i <- create_structure_violin(
+  struct_df, "disorder_average_alphafold_dssp",
+  "Proportion of disordered residues (dssp)", c(0, 1.75), seq(0, 1, .25)
+)
+
+figure_s12j <- create_structure_violin(
+  struct_df, "cov_disorder_elm",
+  "Proportion of residues covered\nby disordered ELMs", c(0, 1.75),
+  seq(0, 1, .25)
+)
+
+figure_s12hj <- figure_s12h + figure_s12i + figure_s12j
+
+ggsave("figure_S12hj.svg",
+  device = "svg", path = plot_dir, figure_s12hj,
+  width = 190, height = 110, units = "mm"
+)
+```
