@@ -42,13 +42,11 @@ raw_dir <- here("raw")
 orf_file <- file.path(raw_dir, "ncorf_list.xlsx")
 
 # Supplementary tables about detected peptides and ncORFs
-table_s2_file <- file.path(raw_dir, "060924_Supp_Table_S2.xlsx")
-table_s3_file <- file.path(raw_dir, "060924_Supp_Table_S3.xlsx")
-table_s4_file <- file.path(raw_dir, "190525_Supp_Table_S4.xlsx")
-table_s5_file <- file.path(raw_dir, "190525_Supp_Table_S5.xlsx")
-
-# Suplementary table S6 containing MS-runs and their annotation
-annotation_file <- file.path(raw_dir, "060924_Supp_Table_S6.xlsx")
+table_s2_file <- file.path(raw_dir, "20250801_VanHeesch_EDtable2.xlsx")
+table_s3_file <- file.path(raw_dir, "20250801_VanHeesch_EDtable3.xlsx")
+table_s6_file <- file.path(raw_dir, "20250801_VanHeesch_EDtable6.xlsx")
+table_s7_file <- file.path(raw_dir, "20250801_VanHeesch_EDtable7.xlsx")
+table_s8_file <- file.path(raw_dir, "20250801_VanHeesch_EDtable8.xlsx")
 
 #-------------------------------------------------------------------------------
 # Load tables
@@ -57,13 +55,13 @@ annotation_file <- file.path(raw_dir, "060924_Supp_Table_S6.xlsx")
 orf_sequences <- read_excel(orf_file, sheet = 3)[
   , c(
     "orf_name", "orf_biotype", "orf_sequence", "gene_name", "gene_id",
-    "transcript", "strand", "chrm", "starts", "ends"
+    "transcript", "strand", "chrm", "starts", "ends", "PhyloCSF (120 mammals)"
   )
 ] %>%
   bind_rows(read_excel(orf_file, sheet = 4)[
     , c(
       "orf_name", "orf_biotype", "orf_sequence", "gene_name", "gene_id",
-      "transcript", "strand", "chrm", "starts", "ends"
+      "transcript", "strand", "chrm", "starts", "ends", "PhyloCSF (120 mammals)"
     )
   ]) %>%
   mutate(
@@ -74,12 +72,13 @@ orf_sequences <- read_excel(orf_file, sheet = 3)[
     ),
     orf_biotype = ifelse(orf_biotype == "lncRNA", "lncRNA ORF", orf_biotype),
     orf_biotype = str_replace(orf_biotype, "ORF", "ORFs"),
-    protein_accession = paste0("CONTRIB_GENCODE_", orf_name)
+    protein_accession = paste0("CONTRIB_GENCODE_", orf_name),
   ) %>%
-  dplyr::rename(protein = orf_sequence)
+  dplyr::rename(protein = orf_sequence, phylocsf = `PhyloCSF (120 mammals)`) %>% 
+  mutate(phylocsf = as.numeric(phylocsf))
 
 # Annoation data of the MS-runs
-annotations <- read_excel(annotation_file) %>%
+annotations <- read_excel(table_s8_file) %>%
   rename(dataset_id = dataset, ms_name = ms_run_name, hla_class = HLA_class) %>%
   mutate(
     is_cancer = case_when(
@@ -96,13 +95,13 @@ annotations <- read_excel(annotation_file) %>%
   )
 
 # Supplementary tables S2-5
-table_s2 <- read_excel(table_s2_file) %>%
+nonhla_peptide_table <- read_excel(table_s2_file) %>%
   dplyr::rename(
     identifier = "PeptideAtlas identifier",
     orf_name = "Ribo-Seq_ORF"
   )
 
-table_s3 <- read_excel(table_s3_file) %>%
+nonhla_orf_table <- read_excel(table_s3_file) %>%
   dplyr::rename(
     identifier = "PeptideAtlas.identifier",
     orf_name = "Ribo-Seq_ORF",
@@ -111,13 +110,13 @@ table_s3 <- read_excel(table_s3_file) %>%
     final_tier = "Final.tier.for.level.of.evidence"
   )
 
-table_s4 <- read_excel(table_s4_file) %>%
+hla_peptide_table <- read_excel(table_s6_file) %>%
   dplyr::rename(
     identifier = "PeptideAtlas.identifier",
     orf_name = "Ribo-Seq_ORF"
   )
 
-table_s5 <- read_excel(table_s5_file) %>%
+hla_orf_table <- read_excel(table_s7_file) %>%
   dplyr::rename(
     identifier = "PeptideAtlas.identifier",
     orf_name = "Ribo-Seq_ORF",
