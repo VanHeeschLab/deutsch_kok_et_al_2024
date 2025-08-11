@@ -16,12 +16,18 @@ suppressPackageStartupMessages({
   library(patchwork)
   library(ggpubr)
   library(gghalves)
+  library(httr)
+  library(ggpattern)
 })
 ```
 
 ## Load required data and define directories and files
 ```{r}
-utils::globalVariables(c("biotype", "score", "cum", "n90", ".", "perc"))
+utils::globalVariables(c(
+  "biotype", "score", "cum", "n90", ".", "perc", "nt",
+  "frame_ref", "is_begin", "cod_num", "pos", "codon",
+  "color", "y_index", "species", "aa", "is_conserved"
+))
 source("load_tables.R")
 source("load_plot_aesthetics.R")
 
@@ -40,6 +46,24 @@ orblq_primate_file <- file.path(raw_dir, "RiboSeqORFs.ORBLq.primate.tsv")
 
 # ORBLv and ORBLq data for ncORFs
 orbl_ncorf_file <- file.path(raw_dir, "Ribo-Seq_ORF_ORBL.2025-06-03.txt")
+
+# PhyloCSF scores from Sandmann paper
+sandmann_file <- file.path(raw_dir, "sandmann_data.xlsx")
+
+msa_species_file <- file.path(raw_dir, "MSA_Species.xlsx")
+
+# ORBLv of matched ncORFs for c1norep308
+orbl_c1norep308_file <- file.path(raw_dir, "ORBLvOfMatchedORFs.c1norep308.txt")
+
+# ORF biotype order used in plots
+orf_order <- c(
+  "CDS, ≤100 codons", "CDS, >100 codons", "uORF", "uoORF",
+  "intORF", "doORF",
+  "dORF", "lncRNA ORF", "Mixed", "Matched untranslated ORFs"
+)
+
+# Colors used per biotype
+orbl_col <- carto_pal(11, "Safe")[c(1, 2, 4:11)]
 ```
 
 ## Define functions
@@ -131,7 +155,7 @@ create_orblq_barplot <- function(orbl_data, x_label) {
   # Returns:
   #   ggplot object with a barplot based on the input data
   orbl_data %>%
-    group_by(biotype) %>% 
+    group_by(biotype) %>%
     # Determine percentage of ncORFs with ORBLq score > .9
     summarise(n = n(), n90 = sum(score > .9)) %>%
     mutate(
@@ -161,6 +185,701 @@ create_orblq_barplot <- function(orbl_data, x_label) {
         geom_vline(xintercept = .1, linetype = "dashed")
     }
 }
+
+get_msa <- function(url) {
+  # Get and process multiple species alignment
+  #
+  # Args:
+  #   url: string with the broadinstitute MSA url
+  #
+  # Returns:
+  #   maf_lines_f: array with the amino acid sequence, and the MSA with one
+  #     species per line. Amino acids and nucleotides are separated by '#'
+  outfile <- file.path(processed_dir, "ncorf_temp.maf")
+
+  # Send GET request and write to file
+  res <- GET(url)
+  if (status_code(res) == 200) {
+    writeBin(content(res, "raw"), outfile)
+    cat("Downloaded MAF file to", outfile, "\n")
+  } else {
+    stop("Failed to download file. Status code: ", status_code(res))
+  }
+
+  maf_lines <- readLines(outfile)
+  # Determine at which line the actual species alignments starts
+  start_aa <- which(str_detect(maf_lines, "Human_aa"))
+  # Process lines to have one species per line, with bases separated by #
+  maf_lines_f <- maf_lines[start_aa:length(maf_lines)] %>%
+    str_replace_all(".*<td class[^A-Z\\-\\.\\*]*", "") %>%
+    str_replace_all("<.*", "") %>%
+    paste0(collapse = "#") %>%
+    str_split("#    #    #") %>%
+    .[[1]] %>%
+    .[1:length(.) - 1]
+}
+
+get_frame_per_nt <- function(nt_string) {
+  # Convert a MSA nucleotide string to a dataframe indicating reading frame
+  #
+  # Args:
+  #   nt_string: string with species name and nucleotides separated by '#'
+  #
+  # Returns:
+  #   base_df: dataframe with nucleotides in first column, and reading frame
+  #     (value 0 - 2) in the 2nd column. The reading frame changes due to
+  #     gaps in the alignment
+  species_bases <- str_split(nt_string, "#", n = 2) %>% .[[1]]
+  species_name <- species_bases[1]
+  bases <- species_bases[2] %>%
+    str_replace_all("#", "") %>%
+    str_split("") %>%
+    .[[1]]
+  base_df <- data.frame(nt = bases) %>%
+    mutate(frame = cumsum(nt %in% c("-", "*", ".")) %% 3)
+  colnames(base_df) <- c("nt", species_name)
+  return(base_df)
+}
+
+process_frame_per_nt <- function(df, ref_df) {
+  # Process get_frame_per_nt result  with resepct to a given reference
+  #
+  # Args:
+  #   df: dataframe as outputted by the function get_frame_per_nt
+  #   ref_df: dataframe as outputted by the function get_frame_per_nt from
+  #     the reference species to use, for example human
+  #
+  # Returns:
+  #   df_processed_start_stop: dataframe with the following columns:
+  #     pos - position of nucleotide/gap in the MSA
+  #     color - name of sequence part (e.g. start codon) used for coloring
+  #       tiles in the heatmap that can be created from this dataframe
+  #     fill - frame relative to ref_df, used for pattern filling the tiles
+  #     species - name of the species
+  #     is_conserved - boolean indicating whether the ORF is intact in
+  #       the species according to the ORBL metrics
+  species_name <- colnames(df)[2]
+  # Name sequence parts and determine frame relative to ref_df
+  df_processed <- df %>%
+    dplyr::rename(frame = 2) %>%
+    bind_cols(ref_df %>%
+                select(frame_ref = 2)) %>%
+    mutate(
+      frame = (frame - frame_ref) %% 3,
+      pos = row_number(),
+      color = case_when(
+        nt %in% c("-", "*", ".") ~ "Gap",
+        .default = "Sequence"
+      ),
+      fill = case_when(
+        nt %in% c("-", "*", ".") ~ "0",
+        frame == 0 ~ "0",
+        frame == 1 ~ "+1",
+        frame == 2 ~ "+2"
+      )
+    )
+
+  # Find all in frame stop-codons
+  stop_codons <- df_processed %>%
+    filter(!nt %in% c("-", "*", ".")) %>%
+    mutate(
+      is_begin = row_number() %% 3 == 1,
+      cod_num = cumsum(is_begin)
+    ) %>%
+    group_by(cod_num) %>%
+    summarise(
+      codon = paste0(nt, collapse = ""),
+      pos = paste0(pos, collapse = "#")
+    ) %>%
+    filter(codon %in% c("TAA", "TGA", "TAG")) %>%
+    separate_rows(pos, sep = "#") %>%
+    mutate(pos = as.numeric(pos))
+
+  # Find the stop-codon at the end of the sequence if it exists
+  stop_codon_end <- df_processed %>%
+    tail(3) %>%
+    summarise(
+      codon = paste0(nt, collapse = ""),
+      pos = paste0(pos, collapse = "#")
+    ) %>%
+    filter(codon %in% c("TAA", "TGA", "TAG")) %>%
+    separate_rows(pos, sep = "#") %>%
+    mutate(pos = as.numeric(pos))
+
+  # Find the start-codon at the start of the sequence if it exists
+  start_codon <- df_processed %>%
+    head(3) %>%
+    summarise(
+      codon = paste0(nt, collapse = ""),
+      pos = paste0(pos, collapse = "#")
+    ) %>%
+    filter(codon == "ATG") %>%
+    separate_rows(pos, sep = "#") %>%
+    mutate(pos = as.numeric(pos))
+
+  # Determine if the ORF structure is intact in this species
+  is_conserved <- identical(start_codon$pos, c(1, 2, 3)) &
+    identical(
+      stop_codons$pos,
+      df_processed %>% tail(3) %>% pull(pos) %>% as.numeric()
+    )
+
+  # Use found start and stop codon for annotating features in the sequence
+  df_processed_start_stop <- df_processed %>%
+    mutate(
+      color = case_when(
+        pos %in% stop_codons$pos ~ "Stop codon",
+        pos %in% stop_codon_end$pos ~ "OOF Stop codon",
+        pos %in% start_codon$pos ~ "Start codon",
+        .default = color
+      ),
+      is_conserved = is_conserved,
+      species = species_name
+    ) %>%
+    select(pos, color, fill, species, is_conserved)
+
+  return(df_processed_start_stop)
+}
+
+create_orbl_heatmap <- function(alignment_df, ref_aaseq) {
+  # Create heatmap-like figure representing an MSA showing ORBL features
+  #
+  # Args:
+  #   alignment_df: merged dataframes from process_frame_per_nt with added
+  #     column y_index
+  #   ref_aaseq: dataframe of amino acid sequence of the reference species,
+  #     with a column indicating the position of each amino acid
+  #
+  # Returns:
+  #   ggplot object with the heatmap
+  orbl_heatmap <- ggplot(alignment_df, aes(pos, y_index)) +
+    geom_tile_pattern(
+      mapping = aes(
+        fill = color,
+        pattern = fill,
+        pattern_angle = fill
+      ),
+      pattern_color = NA,
+      height = .95,
+      pattern_fill = grey_col[6],
+      pattern_density = .5,
+      pattern_spacing = 0.01,
+      pattern_key_scale_factor = 1
+    ) +
+    scale_x_continuous(
+      expand = c(0, 0),
+      breaks = c(),
+      name = element_blank()
+    ) +
+    scale_y_continuous(
+      expand = c(0, 0),
+      name = element_blank(),
+      breaks = alignment_df$y_index %>% unique(),
+      labels = alignment_df$species %>% unique()
+    ) +
+    scale_fill_manual(
+      values = c(
+        Gap = "white",
+        Sequence = green_col[3],
+        `Start codon` = blue_col[4],
+        `Stop codon` = red_col,
+        `OOF Stop codon` = pink_col[1]
+      ),
+      name = element_blank()
+    ) +
+    scale_pattern_manual(
+      values = c(
+        `0` = "none", `+1` = "stripe",
+        `+2` = "stripe"
+      ),
+      name = "Frame relative to Human"
+    ) +
+    scale_pattern_angle_manual(
+      values = c(`0` = 0, `+1` = 45, `+2` = -45),
+      name = "Frame relative to Human"
+    ) +
+    theme(
+      axis.line.y = element_blank(),
+      axis.ticks.y = element_blank(),
+      legend.key = element_rect(colour = "black")
+    ) +
+    geom_text(data = ref_aaseq, aes(label = aa), size = 7 / .pt)
+  return(orbl_heatmap)
+}
+
+create_orbl_annotation <- function(alignment_df) {
+  # Create annotation for the create_orbl_heatmap heatmap
+  #
+  # Args:
+  #   alignment_df: merged dataframes from process_frame_per_nt with added
+  #     column y_index
+  #
+  # Returns:
+  #   patchwork object with two plots, one colors the species in alignment_df
+  #     by their clade, the second colors them by whether the ORF structure
+  #     is intact
+  species_colors <- alignment_df %>%
+    distinct(species) %>%
+    left_join(msa_species, "species") %>%
+    mutate(y_index = -row_number()) %>%
+    ggplot(aes(1, y_index, fill = fill)) +
+    geom_tile() +
+    scale_fill_identity() +
+    scale_x_continuous(expand = c(0, 0)) +
+    scale_y_continuous(expand = c(0, 0)) +
+    remove_x +
+    remove_y +
+    theme(axis.line = element_blank())
+
+  orbl_conserved <- alignment_df %>%
+    distinct(species, y_index, is_conserved) %>%
+    mutate(is_conserved = factor(is_conserved, c(TRUE, FALSE))) %>%
+    ggplot(aes(1, y_index, fill = is_conserved)) +
+    geom_tile() +
+    scale_fill_manual(
+      values = c("#91F991", "#F79F8B"),
+      labels = c("Yes", "No"),
+      name = "ORF structure\nconserved"
+    ) +
+    scale_x_continuous(expand = c(0, 0)) +
+    scale_y_continuous(expand = c(0, 0)) +
+    remove_x +
+    remove_y +
+    theme(axis.line = element_blank())
+
+  orbl_heatmap_annotation <- species_colors + orbl_conserved +
+    plot_layout(nrow = 1)
+  return(orbl_heatmap_annotation)
+}
+
+get_orbl_heatmap <- function(url) {
+  # Wrapper function to automate creating an ORBL heatmap from an MSA
+  #
+  # Args:
+  #   url: string with the broadinstitute MSA url
+  #
+  # Returns: list with two object:
+  #   1. ggplot object with the heatmap
+  #   2. patchwork object with two plots, one colors the species in alignment_df
+  #     by their clade, the second colors them by whether the ORF structure
+  #     is intact
+  msa_lines <- get_msa(url)
+
+  human_ref <- get_frame_per_nt(msa_lines[2])
+
+  species_processed <- lapply(2:length(msa_lines), function(i) {
+    get_frame_per_nt(msa_lines[i]) %>%
+      process_frame_per_nt(human_ref) %>%
+      mutate(y_index = -i + 1)
+  }) %>%
+    bind_rows() %>%
+    mutate(
+      color = factor(color, c(
+        "Start codon", "Sequence", "Stop codon",
+        "OOF Stop codon", "Gap"
+      )),
+      fill = factor(fill, c("0", "+1", "+2"))
+    )
+
+  # Get the amino acid sequence and align it to the 2nd nucleotide per codon
+  aaseq <- species_processed %>%
+    filter(color != "Gap", species == "Human") %>%
+    filter(row_number() %% 3 == 2) %>%
+    mutate(
+      y_index = 0,
+      # Extract aa sequence from the first line of msa_lines
+      aa = msa_lines[1] %>%
+        str_replace_all("Human_aa|#", "") %>%
+        paste0("*") %>%
+        str_split("") %>%
+        unlist()
+    )
+
+  orbl_heatmap <- create_orbl_heatmap(species_processed, aaseq)
+  orbl_heatmap_annotation <- create_orbl_annotation(species_processed)
+  orbl_heatmap_plots <- list(orbl_heatmap, orbl_heatmap_annotation)
+  return(orbl_heatmap_plots)
+}
+```
+
+# Figure 4
+## Figure 4A - ORBL example
+```{r}
+# Read file and define ORBLq scores based on quantiles
+orbl_c1norep308 <- read_table(orbl_c1norep308_file, col_names = "score") %>%
+  arrange(score) %>%
+  mutate(
+    cum = row_number(),
+    orblq = cum / max(cum)
+  )
+
+figure_4a <- ggplot(orbl_c1norep308, aes(score, orblq)) +
+  geom_line() +
+  scale_x_continuous(
+    name = "ORBLv of matched ORFs",
+    breaks = seq(0, 1, .2),
+    labels = seq(0, 1, .2),
+    expand = c(0, 0)
+  ) +
+  scale_y_continuous(
+    name = "Cumulative distribution",
+    limits = c(0, 1),
+    breaks = seq(0, 1, .2),
+    expand = c(0, 0)
+  ) +
+  geom_hline(
+    yintercept = 0.5133252, linetype = "dashed",
+    color = green_col[1]
+  ) +
+  geom_vline(xintercept = 0.3, , linetype = "dashed", color = blue_col[1]) +
+  geom_hline(
+    yintercept = 0.9473136, linetype = "dashed",
+    color = green_col[1]
+  ) +
+  geom_vline(xintercept = 0.9, , linetype = "dashed", color = blue_col[1])
+
+ggsave("figure_4A.svg",
+  device = "svg", path = plot_dir, figure_4a,
+  width = 60, height = 60, units = "mm"
+)
+```
+## Load ORBL and Phylocsf data
+```{r}
+# ORBL scores
+orbl_ncorfs <- read_delim(orbl_ncorf_file, delim = "\t") %>%
+  mutate(
+    BiotypeV42 = str_replace(BiotypeV42, "-", " ") %>%
+      factor(orf_order),
+    url = str_replace_all(CodAlignView, '=hyperlink\\("', "") %>%
+      str_replace('", "CodAlignView"\\)', "")
+  )
+
+# PhyloCSF scores
+phylocsf_scores <- orf_sequences %>%
+  mutate(phylocsf_codon = phylocsf / nchar(protein))
+sandmann_data <- read_excel(sandmann_file) %>%
+  mutate(
+    phylocsf = as.numeric(`PhyloCSF mammals`),
+    phylo_cat = case_when(
+      is.na(phylocsf) ~ "Undefined",
+      phylocsf > 0 ~ "PhyloCSF > 0",
+      phylocsf <= 0 ~ "PhyloCSF ≤ 0"
+    ),
+    phylo_col = case_when(
+      is.na(phylocsf) ~ "white",
+      phylocsf > 0 ~ green_col[3],
+      phylocsf <= 0 ~ grey_col[9]
+    )
+  )
+
+# Combine ORBL and PhyloCSF scores
+orbl_phylocsf <- orbl_ncorfs %>%
+  filter(!is.na(ORBLq)) %>%
+  left_join(
+    hla_orf_table %>% select(orf_name, n_peptides_in_entry),
+    c("Ribo-Seq_ORF" = "orf_name")
+  ) %>%
+  left_join(
+    orf_sequences %>% select(orf_name, phylocsf),
+    c("Ribo-Seq_ORF" = "orf_name")
+  ) %>%
+  replace_na(list(n_peptides_in_entry = 0)) %>%
+  mutate(
+    BiotypeV42 = droplevels(BiotypeV42),
+    has_hla = n_peptides_in_entry > 0
+  ) %>%
+  group_by(BiotypeV42) %>%
+  arrange(-ORBLq) %>%
+  mutate(
+    fraction = row_number() / max(row_number()),
+    is_90 = ORBLq > .9,
+    phylocsf_codon = phylocsf / (NumCodonsWithStop - 1)
+  )
+```
+
+## Figure 4BC - ORBLq comparison
+```{r}
+orblq_placental_data <- orbl_ncorfs %>%
+  select(score = ORBLq, biotype = BiotypeV42) %>%
+  process_orblq_data()
+
+# Create ploygon that highlights region on ORBLq lineplot with ORBLq > .9
+orlq_highlight <- geom_polygon(
+  data = data.frame(
+    x = c(.9, .9, 1, 1, .9),
+    y = c(0, .9, 1, 0, 0)
+  ),
+  aes(x = x, y = y),
+  fill = grey_col[8], , color = NA, show.legend = FALSE
+)
+
+
+figure_4b <- make_orbl_plot(
+  orblq_placental_data, "ORBLq",
+  orbl_col[3:8], orlq_highlight
+) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
+  geom_vline(xintercept = .9, linetype = "dashed", color = "black")
+
+
+figure_4c <-
+  create_orblq_barplot(
+    orblq_placental_data,
+    "Percentage ORFs\nwithORBLq > 0.9"
+  )
+
+figure_4bc <- figure_4b / figure_4c
+
+ggsave("figure_4BC.svg", figure_4bc,
+  device = "svg", path = plot_dir,
+  width = 90, height = 140, units = "mm"
+)
+```
+
+## Figure 4D - ORBLq per biotype
+```{r}
+figure_4d <- orbl_phylocsf %>%
+  split(~BiotypeV42) %>%
+  lapply(function(df) {
+    orf_type <- df %>%
+      head(1) %>%
+      pull(BiotypeV42)
+    barplot_full <- ggplot(df, aes(fraction, ORBLq)) +
+      geom_bar(aes(fill = is_90), stat = "identity", show.legend = FALSE) +
+      scale_x_continuous(
+        expand = c(0, 0),
+        labels = c(),
+        name = element_blank()
+      ) +
+      scale_y_continuous(
+        expand = c(0, 0),
+        name = "ORBLq",
+        limits = c(0, 1)
+      ) +
+      scale_fill_manual(values = c(blue_col[6], red_col)) +
+      geom_hline(yintercept = .9, linetype = "dashed") +
+      geom_abline(
+        intercept = 1,
+        slope = -1,
+        color = "#2B2BD6",
+        linetype = "dashed"
+      ) +
+      theme(axis.ticks.x = element_blank()) +
+      geom_text(
+        data = df %>% select(BiotypeV42) %>% head(1),
+        aes(x = .5, y = .95, label = BiotypeV42),
+        size = 7 / .pt
+      )
+
+    if (orf_type != "uORF") {
+      barplot_full <- barplot_full +
+        theme(axis.title.y = element_blank(), axis.text.y = element_blank())
+    }
+
+    df_counted <- df %>%
+      dplyr::count(is_90) %>%
+      mutate(perc = n / sum(n))
+    barplot_summary <- ggplot(df_counted, aes(1, perc, fill = is_90)) +
+      geom_bar(stat = "identity", position = "stack", show.legend = FALSE) +
+      coord_flip() +
+      scale_x_continuous(
+        expand = c(0, 0),
+        name = element_blank(),
+        labels = c()
+      ) +
+      scale_y_continuous(
+        expand = c(0, 0),
+        name = element_blank(),
+        breaks = seq(0, 1, .25),
+        labels = c(0, "", "0.5", "", 1)
+      ) +
+      geom_hline(yintercept = .1, color = "#2B2BD6", linetype = "dashed") +
+      scale_fill_manual(values = c(blue_col[6], red_col)) +
+      theme(axis.ticks.y = element_blank())
+
+    orblq_plot <- barplot_full / barplot_summary +
+      plot_layout(heights = c(.9, .1))
+    return(orblq_plot)
+  })
+```
+
+## Figure 4EF - Density plots
+```{r}
+figure_4e <- ggplot(
+  orbl_phylocsf,
+  aes(ORBLq, fill = has_hla, color = has_hla)
+) +
+  geom_density(alpha = .3, show.legend = FALSE) +
+  scale_x_continuous(
+    name = "ORBLq",
+    expand = c(0, 0),
+    limits = c(0, 1)
+  ) +
+  scale_y_continuous(
+    name = "Density",
+    expand = c(0, 0)
+  ) +
+  scale_fill_manual(values = c(grey_col[6], green_col[1])) +
+  scale_color_manual(values = c(grey_col[6], green_col[1]))
+
+figure_4f <- ggplot(
+  orbl_phylocsf,
+  aes(phylocsf_codon, fill = has_hla, color = has_hla)
+) +
+  geom_density(alpha = .3, show.legend = FALSE) +
+  scale_x_continuous(
+    name = "PhyloCSF per codon",
+    expand = c(0, 0)
+  ) +
+  scale_y_continuous(
+    name = "Density",
+    expand = c(0, 0)
+  ) +
+  scale_fill_manual(values = c(grey_col[6], green_col[1])) +
+  scale_color_manual(values = c(grey_col[6], green_col[1]))
+
+figure_4ef <- figure_4e / figure_4f
+
+ggsave("figure_4BC.svg", figure_4bc,
+  device = "svg", path = plot_dir,
+  width = 90, height = 100, units = "mm"
+)
+```
+
+## Figure 4G - HLA per biotype
+```{r}
+# Select all ncORFs that are detected in HLA-I samples (one peptide may match
+#  to multiple ncORFs)
+hla_i_support_orfs <- hla_peptide_table %>%
+  filter(msrun_hla_classes %in% c("I", "I & II")) %>%
+  # Select all detected ncORFs, not just the main one linked to the peptide
+  select(identifier, Other.mappings) %>%
+  separate_rows(Other.mappings, sep = ",") %>%
+  pivot_longer(c(identifier, Other.mappings)) %>%
+  filter(str_starts(value, "CONTRIB_GENCODE")) %>%
+  distinct(value) %>%
+  mutate(
+    value = str_replace(value, "CONTRIB_GENCODE_", ""),
+    HLA_I_support = "yes"
+  ) %>%
+  dplyr::rename(`Ribo-Seq_ORF` = value)
+
+# Get ORBLq scores for all ncORFs, group by those detected on HLA-I
+hla_i_compare <- orbl_ncorfs %>%
+  left_join(hla_i_support_orfs, "Ribo-Seq_ORF") %>%
+  replace_na(list(HLA_I_support = "no")) %>%
+  arrange(BiotypeV42) %>%
+  group_by(BiotypeV42) %>%
+  mutate(bio_count = paste0(
+    BiotypeV42, "\n(n = ",
+    sum(HLA_I_support == "yes"), " vs. ",
+    sum(HLA_I_support == "no"), ")"
+  ) %>%
+    factor(unique(.))) %>%
+  ungroup() %>%
+  mutate(`-log10(1-ORBLq)` = -log10(1 - ORBLq)) %>%
+  filter(!is.na(BiotypeV42))
+
+figure_4g <- hla_i_compare %>%
+  {
+    ggplot(., aes(
+      x = bio_count, y = `-log10(1-ORBLq)`, split = HLA_I_support,
+      fill = HLA_I_support
+    )) +
+      geom_half_violin(position = "identity", trim = TRUE) +
+      geom_half_boxplot(
+        data = filter(., HLA_I_support == "yes"),
+        position = "identity",
+        outlier.shape = NA,
+        alpha = 0, outlier.alpha = 1, show.legend = FALSE
+      ) +
+      geom_half_boxplot(
+        data = filter(., HLA_I_support == "no"),
+        position = "identity", side = "r",
+        outlier.shape = NA,
+        alpha = 0, outlier.alpha = 1, show.legend = FALSE
+      ) +
+      scale_x_discrete(name = element_blank(), expand = c(0, 0)) +
+      scale_y_continuous(
+        expand = c(0, 0),
+        limits = c(0, 4)
+      ) +
+      scale_fill_manual(
+        name = "Detected\non HLA-I",
+        values = c(green_col[1], grey_col[6]),
+        labels = c("Yes", "No")
+      ) +
+      geom_pwc(
+        method = "wilcox_test",
+        remove.bracket = TRUE,
+        label = "p = {p.adj}",
+        label.size = 7 / .pt,
+        p.adjust.method = "holm",
+        p.adjust.by = "panel",
+        hide.ns = TRUE
+      )
+  }
+```
+## Figure 4D&G - Combine plots
+```{r}
+figure_4dg <- wrap_plots(figure_4d, nrow = 1) /
+  figure_4g + plot_layout(heights = c(1, 1.5))
+
+ggsave("figure_4DG.svg", figure_4dg,
+  device = "svg", path = plot_dir,
+  width = 160, height = 90, units = "mm"
+)
+```
+
+## Figure 4HI - Heatmaps
+```{r}
+msa_species <- read_excel(msa_species_file) %>%
+  mutate(fill = case_match(
+    clade,
+    "Human" ~ "white",
+    "Primate" ~ "#BCBFC1",
+    "Glires" ~ "#BB282D80",
+    "Cetartiodactyla" ~ "#BB282D99",
+    "Perissodactyla" ~ "#BB282DB2",
+    "Carnivora" ~ "#BB282DCC",
+    "Chiroptera" ~ "#BB282DFF",
+    "Pholidota" ~ "#A02431",
+    "Afrotheria" ~ "#822433",
+    "Xenarthra" ~ "#661D29",
+    "Metatheria" ~ "#4D161F",
+    "Monotremata" ~ "#330F15"
+  ))
+
+url_c8riboseqorf102 <- orbl_ncorfs %>%
+  filter(`Ribo-Seq_ORF` == "c8riboseqorf102") %>%
+  pull(url)
+
+url_c11norep1 <- orbl_ncorfs %>%
+  filter(`Ribo-Seq_ORF` == "c11norep1") %>%
+  pull(url)
+
+c8riboseqorf102_heatmap <- get_orbl_heatmap(url_c8riboseqorf102)
+c11norep1_heatmap <- get_orbl_heatmap(url_c11norep1)
+
+ggsave("figure_4H1.svg", c8riboseqorf102_heatmap[[1]],
+  device = "svg", path = plot_dir,
+  width = 250, height = 120, units = "mm"
+)
+
+ggsave("figure_4H2.svg", c8riboseqorf102_heatmap[[2]],
+  device = "svg", path = plot_dir,
+  width = 30, height = 120, units = "mm"
+)
+
+ggsave("figure_4I1.svg", c11norep1_heatmap[[1]],
+  device = "svg", path = plot_dir,
+  width = 250, height = 120, units = "mm"
+)
+
+ggsave("figure_4I2.svg", c11norep1_heatmap[[2]],
+  device = "svg", path = plot_dir,
+  width = 30, height = 120, units = "mm"
+)
 ```
 
 # Figure S6
@@ -196,50 +915,24 @@ ggsave("Figure_S6A.svg",
 )
 ```
 
-## Figure S6B-G
+## Figure S6B-E
 ```{r}
-orf_order <- c(
-  "CDS, ≤100 codons", "CDS, >100 codons", "uORF", "uoORF",
-  "intORF", "doORF",
-  "dORF", "lncRNA ORF", "Mixed", "Matched untranslated ORFs"
-)
-
-# Colors to be used in plot
-orbl_col <- carto_pal(11, "Safe")[c(1, 2, 4:11)]
-
 figure_s6b <- read_orbl_data(orblv_placental_file) %>%
-  make_orbl_plot("Placental mammal ORBLv\nncORF and MANE Select CDS",
+  make_orbl_plot("Placental mammal ORBLv ncORF and MANE Select CDS",
     orbl_col[1:10],
     show_legend = TRUE
   )
 
 figure_s6c <- read_orbl_data(orblv_primate_file) %>%
-  make_orbl_plot("Primate ORBLv\nncORF and MANE Select CDS", orbl_col[1:10])
-
-orbl_ncorfs <- read_delim(orbl_ncorf_file, delim = "\t") %>%
-  mutate(BiotypeV42 = str_replace(BiotypeV42, "-", " ") %>%
-           factor(orf_order))
-
-orblq_placental_data <- orbl_ncorfs %>%
-  select(score = ORBLq, biotype = BiotypeV42) %>%
-  process_orblq_data()
+  make_orbl_plot("Primate ORBLv ncORF and MANE Select CDS", orbl_col[1:10])
 
 orblq_primate_data <- orbl_ncorfs %>%
   select(score = ORBLq_primate, biotype = BiotypeV42) %>%
   process_orblq_data()
 
-# Create ploygon that highlights region on ORBLq lineplot with ORBLq > .9
-orlq_highlight <- geom_polygon(
-  data = data.frame(
-    x = c(.9, .9, 1, 1, .9),
-    y = c(0, .9, 1, 0, 0)
-  ),
-  aes(x = x, y = y),
-  fill = grey_col[8], , color = NA, show.legend = FALSE
-)
 
 figure_s6d <- make_orbl_plot(
-  orblq_placental_data, "Placental mammal ORBLq",
+  orblq_primate_data, "Primate ORBLq",
   orbl_col[3:8], orlq_highlight
 ) +
   geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
@@ -247,26 +940,12 @@ figure_s6d <- make_orbl_plot(
 
 figure_s6e <-
   create_orblq_barplot(
-    orblq_placental_data,
-    "Percentage ORFs with\nplacental mammal ORBLq > 0.9"
-  )
-
-figure_s6f <- make_orbl_plot(
-  orblq_primate_data, "Primate ORBLq",
-  orbl_col[3:8], orlq_highlight
-) +
-  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
-  geom_vline(xintercept = .9, linetype = "dashed", color = "black")
-
-figure_s6g <-
-  create_orblq_barplot(
     orblq_primate_data,
     "Percentage ORFs with\nprimate ORBLq > 0.9"
   )
 
-figure_s6bg <- figure_s6b + figure_s6d + figure_s6e +
-  figure_s6c + figure_s6f + figure_s6g +
-  plot_layout(nrow = 2, guides = "collect")
+figure_s6be <- figure_s6b + figure_s6c + figure_s6d +
+  figure_s6e + plot_layout(nrow = 2, guides = "collect")
 
 ggsave("Figure_S6BG.svg",
   device = "svg", path = plot_dir, figure_s6bg,
@@ -274,46 +953,14 @@ ggsave("Figure_S6BG.svg",
 )
 ```
 
-## Figure S6H-I
+## Figure S6f
 ```{r}
-# Select all ncORFs that are detected in HLA-I samples (one peptide may match
-#  to multiple ncORFs)
-hla_i_support_orfs <- table_s4 %>%
-  filter(hla_class %in% c("I", "Both")) %>%
-  # Select all detected ncORFs, not just the main one linked to the peptide
-  select(identifier, Other.mappings) %>%
-  separate_rows(Other.mappings, sep = ",") %>%
-  pivot_longer(c(identifier, Other.mappings)) %>%
-  filter(str_starts(value, "CONTRIB_GENCODE")) %>%
-  distinct(value) %>%
-  mutate(
-    value = str_replace(value, "CONTRIB_GENCODE_", ""),
-    HLA_I_support = "yes"
-  ) %>%
-  dplyr::rename(`Ribo-Seq_ORF` = value)
-
-# Get ORBLq scores for all ncORFs, group by those detected on HLA-I
-hla_i_compare <- orbl_ncorfs %>%
-  left_join(hla_i_support_orfs, "Ribo-Seq_ORF") %>%
-  replace_na(list(HLA_I_support = "no")) %>%
-  arrange(BiotypeV42) %>%
-  group_by(BiotypeV42) %>%
-  mutate(bio_count = paste0(
-    BiotypeV42, "\n(n = ",
-    sum(HLA_I_support == "yes"), " vs. ",
-    sum(HLA_I_support == "no"), ")"
-  ) %>%
-    factor(unique(.))) %>%
-  ungroup() %>%
-  mutate(`-log10(1-ORBLq)` = -log10(1 - ORBLq)) %>%
-  filter(!is.na(BiotypeV42))
-
 # Determine number of detected and undetected ncORFs
 com_count <- hla_i_compare %>%
   dplyr::count(HLA_I_support) %>%
   deframe()
 
-figure_s6h <- hla_i_compare %>%
+figure_s6f <- hla_i_compare %>%
   group_by(HLA_I_support) %>%
   mutate(
     orf_count = formatC(n(), big.mark = ","),
@@ -344,51 +991,8 @@ figure_s6h <- hla_i_compare %>%
       )
   }
 
-figure_s6i <- hla_i_compare %>%
-  {
-    ggplot(., aes(
-      x = bio_count, y = `-log10(1-ORBLq)`, split = HLA_I_support,
-      fill = HLA_I_support
-    )) +
-      geom_half_violin(position = "identity", trim = TRUE) +
-      geom_half_boxplot(
-        data = filter(., HLA_I_support == "yes"),
-        position = "identity",
-        outlier.shape = NA,
-        alpha = 0, outlier.alpha = 1, show.legend = FALSE
-      ) +
-      geom_half_boxplot(
-        data = filter(., HLA_I_support == "no"),
-        position = "identity", side = "r",
-        outlier.shape = NA,
-        alpha = 0, outlier.alpha = 1, show.legend = FALSE
-      ) +
-      scale_x_discrete(name = element_blank(), expand = c(0, 0)) +
-      scale_y_continuous(
-        expand = c(0, 0),
-        limits = c(0, 4)
-      ) +
-      scale_fill_manual(
-        name = "Detected on HLA-I",
-        values = green_col[c(1, 4)],
-        labels = c("Yes", "No")
-      ) +
-      geom_pwc(
-        method = "wilcox_test",
-        remove.bracket = TRUE,
-        label = "p = {p.adj}",
-        label.size = 7 / .pt,
-        p.adjust.method = "holm",
-        p.adjust.by = "panel",
-        hide.ns = TRUE
-      )
-  }
-
-figure_s6hi <- figure_s6h + figure_s6i +
-  plot_layout(widths = c(2, 6))
-
-ggsave("Figure_S6HI.svg", figure_s6hi,
+ggsave("Figure_S6F.svg", figure_s6f,
   device = "svg", path = plot_dir,
-  width = 215, height = 60, units = "mm"
+  width = 55, height = 55, units = "mm"
 )
 ```
