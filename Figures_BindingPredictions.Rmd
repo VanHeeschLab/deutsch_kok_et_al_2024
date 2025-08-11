@@ -1,0 +1,1169 @@
+---
+title: "Script to create figures related to binding predictions"
+output: html_document
+author: "Leron Kok"
+---
+
+# Pre-processing
+## Declare libraries
+```{r}
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(here)
+  library(patchwork)
+  library(circlize)
+  library(ComplexHeatmap)
+  library(scales)
+})
+```
+
+## Declare functions
+```{r}
+fisher_test_ligand_atlas <- function(a1, a2, b1, b2) {
+  # Function to perform Fisher's test using four separate inputs
+  f_test <- fisher.test(data.frame(a = c(a1, a2), b = c(b1, b2)))
+  return(f_test$p.value)
+}
+
+extract_kmers <- function(string, k) {
+  # Return all kmers of length k from a string
+  num_kmers <- nchar(string) - k + 1
+  if (num_kmers < 1) {
+    return(character(0))
+  }
+  kmers <- sapply(1:num_kmers, function(i) substring(string, i, i + k - 1))
+  return(kmers)
+}
+
+perform_wtest <- function(df) {
+  # Perform wilcox test
+  #
+  # Args:
+  #   df: dataframe with the columns y_val and detected
+  #
+  # Returns:
+  #   p-value outputted by the wilcox test
+  w_test <- wilcox.test(y_val ~ detected,
+    data = df %>% mutate(detected = factor(
+      detected,
+      levels = c("Detected", "Undetected")
+    ))
+  )
+  p_val <- w_test$p.value
+  return(p_val)
+}
+
+format_pval <- function(p_val) {
+  # Process raw p-value to a formatted string
+  #
+  # Args:
+  #   p_val: raw p-value as a number
+  #
+  # Returns:
+  #   string with the formatted p-value
+  p_val <- case_when(
+    p_val >= 0.05 ~ "p = n.s.",
+    p_val >= 0.010 ~ paste0("p = ", round(p_val, 3)),
+    p_val == 0 ~ "p = 0",
+    .default = paste0("p = ", format(p_val, scientific = TRUE, digits = 4) %>%
+                        str_replace("e", "\u00D710"))
+  )
+  return(p_val)
+}
+```
+
+## Load required data and define directories and files
+```{r}
+source("load_tables.R")
+source("load_peptideatlas_data.R")
+source("load_plot_aesthetics.R")
+tryCatch({
+  source("load_netmhcpan_data.R")
+}, error = function(e) {
+  message("❌ ", conditionMessage(e))
+})
+
+processed_dir <- here("processed")
+plot_dir <- file.path(processed_dir, "plots")
+
+# GTEX FPKM mean expression data (excluding testis)
+gtex_fpkm_file <- file.path(raw_dir, "GTEX_FPKMmean_expression.txt")
+gtex_data <- read.csv(gtex_fpkm_file)
+
+# Data with netMHCpan predictions for c7norep146 kmers for figure S10B
+## Either pregenerated RDS file from github
+net_c17_146_rds_file <- file.path(raw_dir, "net_c17_146.RDS")
+## Or directory with netMHCpan prediction results
+netmhcpan_kmers_c7norep146_dir <-
+  file.path(processed_dir, "netmhcpan_kmers_c7norep146")
+
+# Data with netMHCpan predictions for ncORF kmers for figures S8A-B
+## Either pregenerated RDS file from github or created with file
+net_kmers_nonc_rds_file <- file.path(processed_dir, "net_kmers_nonc.Rds")
+## Or directory with netMHCpan prediction results
+netmhcpan_kmers_nonc_dir <- file.path(processed_dir, "netmhcpan_allkmers9")
+
+n_dataset <- pep_net_orf %>%
+  ungroup() %>%
+  distinct(dataset_id) %>%
+  nrow()
+```
+
+# Figure 2 - Detection statistics
+## Figure 2I - Sample quality
+```{r}
+# Average peptide length of all peptides per samples
+avg_pep_len <- peptide_hla %>%
+  filter(hla_class == "I") %>%
+  group_by(dataset_id, ms_name) %>%
+  summarise(avg_len = mean(nchar(peptide)), pep_count = n(),
+            .groups = "drop")
+
+peplen_plot_data <- pep_net_orf %>%
+  group_by(dataset_id, ms_name, is_binding) %>%
+  summarise(n = n(), orf_count = sum(is_orf), .groups = "drop") %>%
+  mutate(is_binding = ifelse(is_binding, "binding", "non_binding")) %>%
+  pivot_wider(
+    names_from = is_binding, values_from = c(n, orf_count),
+    values_fill = 0
+  ) %>%
+  inner_join(avg_pep_len, c("dataset_id", "ms_name")) %>%
+  mutate(
+    n = n_non_binding + n_binding,
+    perc = n_binding / n,
+    orf_count = orf_count_non_binding + orf_count_binding,
+    n_non_can_perc = orf_count / n * 100,
+    n_non_can_perc_lim = ifelse(n_non_can_perc > 3, 3, n_non_can_perc)
+  ) %>%
+  arrange(n_non_can_perc) %>%
+  filter(avg_len < 20)
+
+figure_2i1 <-
+  ggplot(peplen_plot_data,
+         aes(x = avg_len, y = perc, color = n_non_can_perc_lim)) +
+  geom_point(aes(size = pep_count), stroke = 0) +
+  scale_x_reverse(
+    limits = c(19.3, 8.7),
+    name = "Mean peptide length (aa)",
+    breaks = c(10, 12, 14, 16, 18)
+  ) +
+  scale_y_continuous(
+    limits = c(0, 1.01),
+    name = "% binders (rank ≤ 2)\namongst peptides from 8-12 aa",
+    breaks = c(0, 0.25, 0.5, 0.75, 1),
+    labels = label_percent()
+  ) +
+  scale_color_gradient(
+    name = "% ncORF\npeptides",
+    low = grey_col[1], high = red_col,
+    limits = c(0, 3),
+    breaks = c(0:3),
+    labels = c("0%", "1%", "2%", "3 - 25%")
+  ) +
+  scale_size_continuous(
+    breaks = c(4000, 8000, 12000),
+    labels = label_comma(),
+    name = "# Total peptides"
+  ) +
+  geom_vline(xintercept = 12, linetype = "dashed")
+
+figure_2i2 <- ggplot(
+  peplen_plot_data %>% filter(orf_count > 0),
+  aes(x = avg_len, y = perc, color = n_non_can_perc_lim)
+) +
+  geom_point(aes(size = orf_count), stroke = 0) +
+  theme(legend.direction = "vertical", legend.box = "horizontal") +
+  scale_x_continuous(
+    limits = c(8.7, 19.3),
+    name = "Mean peptide length (aa)",
+    breaks = c(10, 12, 14, 16, 18)
+  ) +
+  scale_y_continuous(
+    limits = c(0, 1.01),
+    name = "% binders (rank ≤ 2)\namongst peptides from 8-12 aa",
+    labels = label_percent()
+  ) +
+  scale_color_gradient(
+    name = "% ncORF\npeptides",
+    low = grey_col[1], high = red_col,
+    limits = c(0, 3),
+    breaks = c(0:3),
+    labels = c("0%", "1%", "2%", "3 - 25%")
+  ) +
+  scale_size_continuous(
+    breaks = c(20, 40, 60),
+    name = "# ncORF\npeptides"
+  ) +
+  geom_vline(xintercept = 12, linetype = "dashed")
+```
+
+## Figure 2J - Dataset comparison
+```{r}
+bind_cmp_plot_data <- pep_net_orf %>%
+  dplyr::count(dataset_id, pep_type, is_binding) %>%
+  mutate(is_binding = ifelse(is_binding, "b", "nb")) %>%
+  pivot_wider(
+    names_from = c(pep_type, is_binding), values_from = n,
+    values_fill = 0
+  ) %>%
+  rowwise() %>%
+  mutate(
+    n = sum(
+      canonical_b, canonical_nb, noncanonical_b, noncanonical_nb,
+      other_b, other_nb
+    ),
+    total_non_can = noncanonical_b + noncanonical_nb,
+    perc_can = canonical_b / (canonical_b + canonical_nb),
+    perc_non_can = noncanonical_b / total_non_can,
+    n_non_can_perc = total_non_can / n * 100
+  ) %>%
+  arrange(n_non_can_perc)
+
+figure_2j <- ggplot(
+  bind_cmp_plot_data %>% filter(!is.nan(perc_non_can)),
+  aes(x = perc_can, y = perc_non_can, color = n_non_can_perc)
+) +
+  geom_point(aes(size = total_non_can), stroke = 0) +
+  scale_x_continuous(
+    limits = c(0, 1),
+    name = "% binders canonical\namongst peptides from 8-12 aa",
+    labels = label_percent()
+  ) +
+  scale_y_continuous(
+    limits = c(0, 1),
+    name = "% binders non-canonical\namongst peptides from 8-12 aa",
+    labels = label_percent()
+  ) +
+  scale_color_gradient(
+    name = "% ncORF\npeptides",
+    low = grey_col[1], high = red_col,
+    limits = c(0, 3), breaks = c(0:3),
+    labels = label_percent(scale = 1)
+  )
+```
+
+## Figure 2I-J - Combine 
+```{r}
+figure_2ij <- figure_2i1 + figure_2i2 + figure_2j + plot_layout(nrow = 1)
+
+ggsave("Figure_2IJ.svg",
+  device = "svg", path = plot_dir, figure_2ij,
+  width = 3152.30, height = 682.48, units = "px"
+)
+```
+
+## Figure 2H - Heatmap
+```{r}
+# Heatmap colors
+ht_colors <- colorRamp2(
+  breaks = c(-1, 0, 2, 2.000001, 100),
+  colors = c(
+    "white", "#0072B2", "#0072B2",
+    "#E69F00", "#E69F00"
+  )
+)
+
+# Heatmap data
+ht_data <- pep_net_orf %>%
+  filter(is_orf) %>%
+  distinct(peptide, min_rank, hla_typing, orf_biotype, sample_type,
+           is_binding) %>%
+  mutate(
+    pep = paste0(peptide, "_", orf_biotype),
+    hla_sample = paste0(hla_typing, "_", sample_type)
+  )
+
+# Concordance predictions grouped by HLA typing and sample type
+concordance <- ht_data %>%
+  dplyr::count(is_binding) %>%
+  mutate(perc = n / sum(n)) %>%
+  filter(is_binding) %>%
+  pull(perc)
+
+# Heatmap data when grouping by HLA-typing
+ht_all <- ht_data %>%
+  distinct(pep, hla_typing, min_rank, orf_biotype) %>%
+  pivot_wider(
+    names_from = hla_typing, values_from = min_rank,
+    values_fill = -1
+  ) %>%
+  column_to_rownames("pep")
+
+# Heatmap data when grouping by HLA-typing and tissue type
+ht_tis <- ht_data %>%
+  select(pep, hla_sample, min_rank, orf_biotype) %>%
+  pivot_wider(
+    names_from = hla_sample, values_from = min_rank,
+    values_fill = -1
+  ) %>%
+  column_to_rownames("pep")
+
+# Convert dataframe structure to matrices
+ht_mtr_tis <- ht_tis %>%
+  select(-orf_biotype) %>%
+  as.matrix()
+
+# Row split (by tissue type)
+ht_row_split <- ht_tis %>%
+  select(orf_biotype) %>%
+  make_biotype_levels()
+
+# Column split (by ORF biotype)
+ht_col_split <- data.frame(
+  hla_sample =
+    colnames(ht_tis %>% select(-orf_biotype))
+) %>%
+  mutate(col_split = factor(str_extract(hla_sample, "(?<=\\d_).*"),
+    levels = c(
+      "Non-cancer_cell line",
+      "Non-cancer_non-cell line",
+      "Cancer_cell line",
+      "Cancer_non-cell line"
+    )
+  )) %>%
+  column_to_rownames("hla_sample")
+
+# Column annotation
+## Number of predicted binding peptides per column
+col_counts_tis <- apply(ht_mtr_tis, 2, function(x) sum(x <= 2 & x >= 0))
+
+## Number of total peptides per row
+pep_per_hla_tis <- pep_net_orf %>%
+  distinct(peptide, hla_typing, sample_type) %>%
+  mutate(hla_sample = paste0(hla_typing, "_", sample_type)) %>%
+  dplyr::count(hla_sample) %>%
+  semi_join(data.frame(hla_sample = colnames(ht_mtr_tis)), "hla_sample") %>%
+  arrange(match(hla_sample, colnames(ht_mtr_tis))) %>%
+  column_to_rownames("hla_sample")
+
+color_ann_df_tis <- ht_col_split %>%
+  mutate(
+    is_cancer = str_extract(col_split, ".*(?=_)"),
+    is_cellline = str_extract(col_split, "(?<=_).*")
+  ) %>%
+  select(-col_split)
+
+col_ann_colours <- list(
+  is_cancer = c(
+    "Cancer" = blue_col[2],
+    "Non-cancer" = blue_col[6]
+  ),
+  is_cellline = c(
+    "cell line" = green_col[2],
+    "non-cell line" = green_col[6]
+  )
+)
+
+# Create annotation object
+col_ha_tis <- HeatmapAnnotation(
+  df = color_ann_df_tis,
+  binders = anno_barplot(col_counts_tis,
+    border = FALSE, height = unit(6, "mm"),
+    axis_param = list(
+      gp = gpar(fontsize = 7),
+      at = c(0, 200)
+    )
+  ),
+  total_pep = anno_barplot(pep_per_hla_tis,
+    border = FALSE, height = unit(6, "mm"),
+    axis_param = list(
+      at = c(0, 2e4),
+      labels = c("0", "20k"),
+      gp = gpar(fontsize = 7)
+    )
+  ),
+  col = col_ann_colours, show_annotation_name = FALSE,
+  annotation_height = unit(c(2, 2, 6, 6), "mm"),
+  annotation_legend_param =
+    list(
+      is_cancer = list(
+        title = "",
+        labels = c("Cancer", "Non-cancer"),
+        at = c("Cancer", "Non-cancer"),
+        labels_gp = gpar(fontsize = 7)
+      ),
+      is_cellline = list(
+        title = "",
+        labels = c("Cell line", "Non-cell line"),
+        at = c("cell line", "non-cell line"),
+        labels_gp = gpar(fontsize = 7)
+      )
+    ),
+  gap = unit(c(.3, .3, 2, 1.5), "mm")
+)
+
+# Row annotation
+## Number of predicted binders and non-binders per row
+row_counts <- apply(ht_all %>% select(-orf_biotype),
+                    1, function(x) sum(x <= 2 & x >= 0))
+row_counts_nb <- apply(ht_all %>% select(-orf_biotype),
+                       1, function(x) sum(x > 2))
+
+## Create annotation object
+row_ha <- HeatmapAnnotation(
+  binders = anno_barplot(row_counts,
+    border = FALSE, gp = gpar(col = "#0072B2"),
+    ylim = c(0, 120), extend = 0, width = unit(8.4, "mm"),
+    axis_param = list(
+      gp = gpar(fontsize = 7),
+      at = c(0, 50, 100)
+    )
+  ),
+  non_binders = anno_barplot(row_counts_nb,
+    border = FALSE,
+    gp = gpar(col = "#E69F00"), ylim = c(0, 50),
+    extend = 0, width = unit(3.5, "mm"),
+    axis_param = list(
+      gp = gpar(fontsize = 7),
+      at = c(0, 50)
+    )
+  ),
+  show_annotation_name = FALSE, which = "row", gap = unit(c(1.5, 1.5), "mm")
+)
+
+# Heatmap
+figure_2k <- Heatmap(ht_mtr_tis,
+  show_row_names = FALSE,
+  show_column_names = FALSE,
+  cluster_columns = TRUE, cluster_rows = TRUE, col = ht_colors,
+  column_split = ht_col_split, use_raster = FALSE,
+  row_split = ht_row_split, row_title_rot = 0,
+  top_annotation = col_ha_tis, right_annotation = row_ha,
+  cluster_row_slices = FALSE,
+  cluster_column_slices = FALSE,
+  show_row_dend = FALSE, show_column_dend = FALSE, show_heatmap_legend = FALSE,
+  column_title_side = "bottom",
+  column_title = paste0(
+    "Samples grouped by ", ncol(ht_all) - 1,
+    " HLA typings and 4 sample types (n = ",
+    ncol(ht_mtr_tis), " combinations)"
+  ),
+  column_title_gp = gpar(fontsize = 7),
+  row_title_gp = gpar(fontsize = 7),
+  height = nrow(ht_mtr_tis) * unit(0.030, "mm"),
+  width = ncol(ht_mtr_tis) * unit(0.3, "mm")
+)
+
+svg(file = file.path(plot_dir, "Figure_2K.svg"))
+draw(figure_2k, annotation_legend_side = "bottom", newpage = FALSE)
+dev.off()
+```
+
+# Figure 3E - Ligand Atlas
+```{r}
+ligand_atlas_data <- pep_net_orf %>%
+  ungroup() %>%
+  filter(dataset_id == "PXD019643", is_binding, pep_type != "other") %>%
+  mutate(
+    tissue_type = str_extract(ms_name, "(?<=_)\\w+(?=_W6)"),
+    tissue_type = str_replace(tissue_type, "(?<=\\w)(?=[A-Z])", " ")
+  ) %>%
+  distinct(tissue_type, is_orf, peptide) %>%
+  dplyr::count(tissue_type, is_orf) %>%
+  mutate(
+    is_orf = ifelse(is_orf, "ncORF", "CDS"),
+    tissue_type = case_when(
+      tissue_type == "Brain" ~ "Brain (Cerebral cortex)",
+      tissue_type == "Mamma" ~ "Mamma (Breast)",
+      tissue_type == "Myelon" ~ "Myelon (Spinal cord)",
+      TRUE ~ tissue_type
+    )
+  ) %>%
+  pivot_wider(names_from = is_orf, values_from = n, values_fill = 0) %>%
+  mutate(
+    total_ncORF = sum(.$ncORF), total_CDS = sum(.$CDS),
+    ncORF_nottis = total_ncORF - ncORF,
+    CDS_nottis = total_CDS - CDS
+  ) %>%
+  rowwise() %>%
+  mutate(
+    p_val =
+      fisher_test_ligand_atlas(ncORF, ncORF_nottis, CDS, CDS_nottis)
+  ) %>%
+  ungroup() %>%
+  mutate(
+    p_adj = p_val * nrow(.),
+    is_sig = p_adj < 0.05
+  ) %>%
+  rowwise() %>%
+  mutate(
+    perc_orf = ncORF / (ncORF + CDS) * 100,
+    conf_low = binom.test(ncORF, ncORF + CDS)$conf.int[1] * 100,
+    conf_high = binom.test(ncORF, ncORF + CDS)$conf.int[2] * 100
+  ) %>%
+  ungroup() %>%
+  arrange(perc_orf) %>%
+  mutate(tissue_type = factor(tissue_type, levels = tissue_type))
+
+figure_3e1 <- ggplot() +
+  geom_bar(
+    data = ligand_atlas_data, mapping = aes(tissue_type, ncORF),
+    stat = "identity", fill = green_col[1]
+  ) +
+  scale_x_discrete(name = element_blank(), labels = c(), expand = c(0, 0)) +
+  scale_y_continuous(name = "Number of\nncORF peptides", expand = c(0, 0)) +
+  theme(axis.ticks.x = element_blank())
+
+figure_3e2 <- ggplot() +
+  geom_bar(
+    data = ligand_atlas_data, mapping = aes(tissue_type, CDS),
+    stat = "identity", fill = pink_col[1]
+  ) +
+  scale_x_discrete(name = element_blank(), labels = c(), expand = c(0, 0)) +
+  scale_y_continuous(
+    name = "Number of\nCDS peptides", expand = c(0, 0),
+    breaks = c(0, 5000, 10000), labels = c("0", "5k", "10k")
+  ) +
+  theme(axis.ticks.x = element_blank())
+
+figure_3e3 <- ggplot(ligand_atlas_data,
+  mapping = aes(tissue_type, perc_orf, fill = is_sig)
+) +
+  geom_bar(stat = "identity") +
+  scale_x_discrete(expand = c(0, 0), name = element_blank()) +
+  scale_y_continuous(
+    expand = c(0, 0),
+    name = "% ncORF peptides"
+  ) +
+  scale_fill_manual(
+    values = c(green_col[4], red_col), name = element_blank(),
+    labels = c("", "Significant\nenrichment")
+  ) +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1)) +
+  geom_hline(
+    yintercept = sum(ligand_atlas_data$ncORF) /
+      (sum(ligand_atlas_data$ncORF) + sum(ligand_atlas_data$CDS)) * 100,
+    linetype = "dashed"
+  )
+
+figure_3e <- figure_3e1 / figure_3e2 / figure_3e3
+
+ggsave("Figure_3E.svg",
+  device = "svg", path = plot_dir, figure_3e,
+  width = 1544, height = 1375, units = "px"
+)
+```
+
+# Figure S8 - Binding predictions
+## Figure S8AB - 9mers per hla-typing
+### Extract 9mers from non-canonical ORFs
+```{r}
+k <- 9
+nonc_seq <- can_nonc_seq %>%
+  filter(str_starts(protein_accession, "CONTRIB_GENCODE_c"))
+
+k_mers_nonc <- apply(nonc_seq, 1, function(x) extract_kmers(x["protein"], k))
+names(k_mers_nonc) <- paste0(nonc_seq$protein_accession, "__")
+kmer_df_nonc <- k_mers_nonc %>%
+  unlist() %>%
+  enframe() %>%
+  mutate(protein_accession = str_extract(name, ".*(?=__)")) %>%
+  group_by(protein_accession) %>%
+  mutate(
+    kmer_loc = row_number(),
+    end_offset = max(kmer_loc) - kmer_loc
+  ) %>%
+  select(-name) %>%
+  dplyr::rename(kmer = value) %>%
+  ungroup() %>%
+  left_join(pep_net_orf %>%
+              filter(is_orf) %>%
+              distinct(peptide) %>%
+              mutate(kmer_detected = TRUE), c("kmer" = "peptide")) %>%
+  left_join(pep_nonc_long %>%
+              ungroup() %>%
+              distinct(protein_accession) %>%
+              mutate(orf_detected = TRUE), "protein_accession") %>%
+  replace_na(list(kmer_detected = FALSE, orf_detected = FALSE))
+```
+
+### Read NetMHCpan prediction results if exist, or prepare NetMHCpan input
+```{r}
+# Read from RDS if exists
+if (file.exists(net_kmers_nonc_rds_file)) {
+  net_kmers_nonc <- readRDS(net_kmers_nonc_rds_file)
+  ## Else try to locate NetMCHpan prediction output
+} else {
+  net_files <- list.files(
+    path = netmhcpan_kmers_nonc_dir,
+    pattern = paste0("net_.*.xls"), full.names = TRUE
+  )
+  ## If output exists, save to file as input for specific script to run
+  ##  (better to do as separate job due to the time it takes running)
+  if (length(net_files) > 0) {
+    save(net_files, nonc_kmers,
+         file = file.path(processed_dir, "retrieve_net_kmers_data.Rds"))
+    stop(paste0("No RDS result of predictions present.\n",
+                "Run 'retrieve_netmhcpan_kmers_nonc.R' ",
+                "first on generated input data"))
+  } else {
+    ## Otherwise prepare prediction input
+    nonc_kmers <- kmer_df_nonc %>%
+      distinct(kmer) %>%
+      rename("peptide" = 1)
+
+    write_net("", nonc_kmers)
+
+    found_alleles <- hla_df %>%
+      distinct(hla_type) %>%
+      arrange(hla_type) %>%
+      mutate(
+        hla_type = paste0(
+          "HLA-", str_extract(hla_type, "^[A-Z]\\d\\d"), ":",
+          str_extract(hla_type, "(?<=^[A-Z]\\d\\d)\\d+")
+        )
+      )
+
+    write.table(found_alleles$hla_type, paste0(net_input, "/net_alleles.txt"),
+      row.names = FALSE, col.names = FALSE, quote = FALSE
+    )
+    # Issue error as netMHCpan needs to be run first on prediction input
+    stop(paste0("No NetMHCpan predictions RDS file present.\n",
+                "Run 'retrieve_netmhcpan_kmers_nonc.R' on generated",
+                "input data"))
+  }
+}
+```
+
+### Create figure S8A
+```{r}
+ms_alleles <- hla_df %>%
+  distinct(peptide, hla_typing, hla_type) %>%
+  inner_join(
+    pep_nonc_long %>% distinct(peptide, protein_accession),
+    "peptide", relationship = "many-to-many"
+  ) %>%
+  distinct(protein_accession, hla_typing, hla_type) %>%
+  inner_join(kmer_df_nonc, "protein_accession",
+             relationship = "many-to-many") %>%
+  inner_join(net_kmers_nonc, c("kmer" = "peptide", "hla_type")) %>%
+  left_join(
+    hla_df %>%
+      distinct(peptide, hla_typing, hla_type) %>%
+      mutate(kmer_hla_detected = TRUE),
+    c("kmer" = "peptide", "hla_type", "hla_typing")
+  ) %>%
+  replace_na(list(kmer_hla_detected = FALSE)) %>%
+  distinct(hla_type, rank, kmer_hla_detected, hla_typing, kmer) %>%
+  group_by(kmer_hla_detected, hla_typing, kmer) %>%
+  summarise(min_rank = min(rank), .groups = "drop") %>%
+  ungroup() %>%
+  mutate(
+    detected = ifelse(kmer_hla_detected, "Detected", "Undetected"),
+    kmer_hla_detected = factor(kmer_hla_detected, levels = c(TRUE, FALSE))
+  )
+
+min_rank_det_pval <- perform_wtest(ms_alleles %>%
+                                     dplyr::rename(y_val = min_rank)) %>%
+  format_pval()
+p_label_min_rank_det <- grobTree(textGrob(min_rank_det_pval,
+  x = 0.5,
+  y = 1, just = c("center", "top"),
+  gp = gpar(col = "black", fontsize = 7)
+))
+
+figure_s8a <- ggplot(
+  ms_alleles,
+  aes(kmer_hla_detected,
+    y = min_rank,
+    fill = kmer_hla_detected
+  )
+) +
+  geom_violin(trim = TRUE, show.legend = FALSE, scale = "width") +
+  geom_boxplot(fill = "transparent", outlier.shape = NA) +
+  scale_fill_manual(values = green_col[c(2, 5)]) +
+  scale_x_discrete(
+    name = element_blank(), breaks = c(TRUE, FALSE),
+    labels = c("Detected\n9mers", "Undetected\n9mers")
+  ) +
+  scale_y_continuous(
+    trans = scales::pseudo_log_trans(base = 10), limits = c(0, 100),
+    breaks = c(0, 2, 25, 50, 75, 100),
+    name = "Minimum rank of 9mer\nfrom detected ncORFs\nper HLA-typing"
+  ) +
+  geom_hline(yintercept = 2, linetype = "dashed") +
+  annotation_custom(p_label_min_rank_det)
+```
+
+### Create figure S8B
+
+```{r}
+nonc_alleles <- hla_df %>%
+  semi_join(pep_nonc, "peptide") %>%
+  distinct(hla_type)
+
+nonc_kmer_all_allele_perc <- kmer_df_nonc %>%
+  inner_join(net_kmers_nonc, c("kmer" = "peptide"),
+             relationship = "many-to-many") %>%
+  semi_join(nonc_alleles, "hla_type") %>%
+  distinct(kmer, protein_accession, orf_detected, rank, hla_type) %>%
+  group_by(kmer, protein_accession, orf_detected) %>%
+  summarise(min_rank = min(rank), .groups = "drop") %>%
+  mutate(
+    detected = ifelse(orf_detected, "Detected", "Undetected"),
+    orf_detected = factor(orf_detected, levels = c(TRUE, FALSE))
+  ) %>%
+  mutate(is_binding = min_rank <= 2) %>%
+  ungroup() %>%
+  dplyr::count(protein_accession, orf_detected, is_binding, detected) %>%
+  pivot_wider(names_from = is_binding, values_from = n, values_fill = 0) %>%
+  mutate(total = `TRUE` + `FALSE`, perc = `TRUE` / total * 100)
+
+perc_rank_orf_pval <- perform_wtest(nonc_kmer_all_allele_perc %>%
+                                      dplyr::rename(y_val = perc)) %>%
+  format_pval()
+p_label_perc_rank_orf <- grobTree(textGrob(perc_rank_orf_pval,
+  x = 0.5, y = 1,
+  just = c("center", "top"), gp = gpar(col = "black", fontsize = 7)
+))
+
+figure_s8b <- ggplot(
+  nonc_kmer_all_allele_perc,
+  aes(orf_detected, y = perc, fill = orf_detected)
+) +
+  geom_violin(trim = TRUE, show.legend = FALSE) +
+  geom_boxplot(fill = "transparent", outlier.shape = NA) +
+  scale_fill_manual(values = green_col[c(2, 5)]) +
+  scale_x_discrete(
+    name = element_blank(), breaks = c(TRUE, FALSE),
+    labels = c(
+      "9mers from\ndetected\nncORFs",
+      "9mers from\nundetected\nncORFs"
+    )
+  ) +
+  scale_y_continuous(
+    name = paste0(
+      "% 9mers with rank ≤ 2 across\n",
+      nrow(nonc_alleles), " alleles per ncORF"
+    ),
+    limits = c(0, 100),
+    breaks = c(0, 25, 50, 75, 100),
+    labels = c("0%", "25%", "50%", "75%", "100%")
+  ) +
+  annotation_custom(p_label_perc_rank_orf)
+```
+
+### Figure S8A-B - Combine
+```{r}
+figure_s8ab <- figure_s8a + figure_s8b
+
+ggsave("Figure_S8AB.svg",
+  device = "svg", path = plot_dir, figure_s8ab,
+  width = 1100, height = 1000, units = "px"
+)
+```
+
+## Figure S8G - Ligand Atlas quality
+
+```{r}
+figure_s8g <- ggplot(
+  peplen_plot_data %>%
+    filter(dataset_id == "PXD019643") %>%
+    arrange(orf_count),
+  aes(x = avg_len, y = perc, color = orf_count)
+) +
+  geom_point(aes(size = pep_count), stroke = 0) +
+  theme(legend.direction = "vertical", legend.box = "horizontal") +
+  scale_color_gradient(
+    name = "# non-can\npeptides",
+    low = grey_col[1], high = red_col,
+    limits = c(0, 45),
+    breaks = c(0, 10, 20, 30, 40)
+  ) +
+  scale_size_continuous(
+    breaks = c(2000, 4000, 6000),
+    labels = c("2,000", "4,000", "6,000"),
+    name = "# total\npeptides"
+  ) +
+  scale_y_continuous(
+    expand = c(0, 0), limits = c(0, 1.01),
+    name = "% binders (rank ≤ 2)\namongst peptides from 8-12 aa",
+    breaks = c(0, 0.25, 0.5, 0.75, 1),
+    labels = c("0%", "25%", "50%", "75%", "100%")
+  ) +
+  scale_x_continuous(
+    expand = c(0, 0), limits = c(8.7, 15),
+    name = "Mean peptide length",
+    breaks = c(10, 12, 14)
+  )
+
+ggsave("figure_S8G.svg",
+  device = "svg", path = plot_dir, figure_s8g,
+  width = 1237.205, height = 600, units = "px"
+)
+```
+
+## Figure S8H - LigandAtlas - GTEX comparison
+```{r}
+ligand_atlas_genes <- pep_net_orf %>%
+  ungroup() %>%
+  filter(dataset_id == "PXD019643", is_binding, pep_type == "noncanonical") %>%
+  distinct(peptide, pep_type) %>%
+  inner_join(pep_nonc, "peptide")
+
+gtex_df <- gtex_data %>%
+  dplyr::rename(gene_id = X) %>%
+  pivot_longer(-gene_id) %>%
+  arrange(name) %>%
+  mutate(ligand_tissue = case_when(
+    name == "Kidney.Cortex" ~ "Kidney",
+    name == "Stomach" ~ "Stomach",
+    name == "Pancreas" ~ "Pancreas",
+    str_detect(name, "Esophagus") ~ "Esophagus",
+    name == "Muscle.Skeletal" ~ "Muscle",
+    name == "Prostate" ~ "Prostate",
+    name == "Spleen" ~ "Spleen",
+    name == "Brain.Cerebellum" ~ "Cerebellum",
+    str_detect(name, "Cortex") ~ "Brain (Cerebral cortex)",
+    name == "Adrenal_Gland" ~ "Adrenal Gland",
+    str_detect(name, "Colon") ~ "Colon",
+    str_detect(name, "Heart") ~ "Heart",
+    name == "Lung" ~ "Lung",
+    name == "Breast.Mammary_tissue" ~ "Mamma (Breast)",
+    str_detect(name, "Skin") ~ "Skin",
+    name == "Bladder" ~ "Bladder",
+    name == "Artery.Aorta" ~ "Aorta",
+    name == "Liver" ~ "Liver",
+    name == "Thyroid" ~ "Thyroid",
+    name == "Small_Intestine" ~ "Small Intestine",
+    name == "Ovary" ~ "Ovary",
+    name == "Uterus" ~ "Uterus",
+    name == "Brain.Cerebellar_Hemisphere" ~ "Cerebellum"
+  )) %>%
+  filter(!is.na(ligand_tissue)) %>%
+  mutate(
+    gtex_name =
+      str_replace_all(name, "_", " ") %>%
+      str_replace("[.]+", " - ") %>%
+      str_replace_all("[.]", "") %>%
+      str_replace("FrontalC", "Frontal C") %>%
+      str_replace("Gastroesophjunction", "Gastroesophegeal Junction") %>%
+      str_replace("LeftV", "Left V") %>%
+      str_replace("suprapubic", "Suprapubic") %>%
+      str_replace("lower leg", "Lower Leg") %>%
+      str_replace("appendage", "Appendage")
+  ) %>%
+  semi_join(ligand_atlas_genes, "gene_id") %>%
+  mutate(ligand_tissue = factor(ligand_tissue,
+    levels = ligand_atlas_data$tissue_type
+  )) %>%
+  arrange(ligand_tissue) %>%
+  mutate(gtex_name = factor(gtex_name, levels = unique(gtex_name)))
+
+figure_s8h <- ggplot() +
+  geom_jitter(gtex_df %>% filter(value <= 50),
+    mapping = aes(gtex_name, value),
+    stat = "identity", size = .01
+  ) +
+  geom_boxplot(gtex_df,
+    mapping = aes(gtex_name, value),
+    alpha = 0.8, outlier.shape = NA, size = .1
+  ) +
+  coord_cartesian(ylim = c(0, 50)) +
+  scale_x_discrete(expand = c(0, 0), name = element_blank()) +
+  scale_y_continuous(
+    expand = c(0, 0),
+    name = "Mean TPM of gene"
+  ) +
+  scale_fill_manual(values = green_col[4]) +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))
+
+ggsave("Figure_S8H.svg",
+  device = "svg", path = plot_dir, figure_s8h,
+  width = 1300, height = 800, units = "px"
+)
+```
+
+# Figure S10 - ORF examples
+## Figure S10A - nonHLA c11riboseqorf4
+```{r}
+b_w <- 0.7
+orf_id <- "CONTRIB_GENCODE_c11riboseqorf4"
+
+orf_seq <- can_nonc_seq %>%
+  filter(str_detect(protein_accession, "^CONTRIB_GENCODE_c11riboseqorf4$")) %>%
+  pull(protein)
+
+nonhla_pep <- nonhla_peptide_table %>%
+  filter(str_detect(identifier, orf_id)) %>%
+  select(sequence, length) %>%
+  rowwise() %>%
+  mutate(
+    pep_start = gregexpr(sequence, orf_seq)[[1]],
+    pep_end = pep_start + length - 1
+  ) %>%
+  ungroup() %>%
+  arrange(pep_start, pep_end) %>%
+  mutate(x_group = c(1, 2, 2, 3, 4, 4, 4, 5, 5, 5, 6)) %>%
+  group_by(x_group) %>%
+  mutate(
+    y_order = row_number(),
+    y_min = y_order - 0.5 * b_w,
+    y_max = y_order + 0.5 * b_w
+  )
+
+figure_s10a <- ggplot() +
+  geom_rect(nonhla_pep,
+    mapping = aes(
+      xmin = pep_start, xmax = pep_end,
+      ymin = y_min, ymax = y_max
+    ), fill = "#42AB5C"
+  ) +
+  scale_x_continuous(
+    limits = c(1, nchar(orf_seq)), expand = c(0, 0),
+    breaks = c(1:nchar(orf_seq)),
+    labels = sapply(
+      1:nchar(orf_seq),
+      function(x) ifelse(x %% 10 == 0, x, "")
+    ),
+    name = orf_seq
+  ) +
+  scale_y_continuous(breaks = c()) +
+  theme(axis.line.y = element_blank())
+
+ggsave("Figure_S10A.svg",
+  device = "svg", path = plot_dir, figure_s10a,
+  width = 2200, height = 300, units = "px"
+)
+```
+
+## Figure S10B - HLA c17norep146
+### Create c17norep146 kmers
+```{r}
+seq_17_146 <- can_nonc_seq %>%
+  filter(protein_accession == "CONTRIB_GENCODE_c17norep146") %>%
+  pull(protein)
+
+seq_17_146_kmer_df <- sapply(8:12, function(i) extract_kmers(seq_17_146, i)) %>%
+  unlist() %>%
+  enframe() %>%
+  dplyr::rename(kmer = value) %>%
+  select(-name)
+```
+
+### Read NetMHCpan prediction results if exist, or prepare NetMHCpan input
+```{r}
+# Read from RDS if exists
+if (file.exists(net_c17_146_rds_file)) {
+  net_c17_146 <- readRDS(net_c17_146_rds_file)
+  ## Else try to locate NetMCHpan prediction output
+} else {
+  net_c17_146 <- list.files(path = netmhcpan_kmers_c7norep146_dir,
+                            pattern = "net_.*.xls1", full.names = TRUE) %>%
+    map_df(read_netmhcpan)
+  ## Otherwise prepare prediction input
+  if (length(net_c17_146) == 0) {
+    unique_kmers <- seq_17_146_kmer_df %>%
+      distinct(kmer) %>%
+      rename("peptide" = 1)
+    write_net("", unique_kmers)
+
+    found_alleles <- hla_df %>%
+      select(hla_type) %>%
+      distinct() %>%
+      arrange(hla_type) %>%
+      mutate(
+        hla_type = paste0(
+          "HLA-", str_extract(hla_type, "^[A-Z]\\d\\d"), ":",
+          str_extract(hla_type, "(?<=^[A-Z]\\d\\d)\\d+")
+        )
+      )
+
+    write.table(found_alleles$hla_type, paste0(net_input, "/net_alleles.txt"),
+                row.names = FALSE, col.names = FALSE, quote = FALSE
+    )
+    # Issue error as netMHCpan needs to be run first on prediction input
+    stop(paste0("No NetMHCpan predictions present.\n",
+                "Run NetMHCpan first on generated input data"))
+  }
+}
+```
+
+### Create Figure S10B
+```{r}
+# Process alleles
+alleles_17_146 <- pep_nonc %>%
+  filter(protein_accession == "CONTRIB_GENCODE_c17norep146") %>%
+  inner_join(hla_df, "peptide") %>%
+  separate_rows(hla_typing, sep = ",") %>%
+  dplyr::count(hla_typing)
+
+# Process kmer data
+seq_17_146_kmer_df_rank <- seq_17_146_kmer_df %>%
+  mutate(pep_len = nchar(kmer)) %>%
+  group_by(pep_len) %>%
+  mutate(
+    kmer_start = row_number(),
+    kmer_end = row_number() + pep_len - 1
+  ) %>%
+  ungroup() %>%
+  left_join(
+    net_c17_146 %>%
+      inner_join(alleles_17_146, c("hla_type" = "hla_typing")),
+    c("kmer" = "peptide")
+  ) %>%
+  filter(rank <= 2) %>%
+  group_by(kmer, pep_len, kmer_start, kmer_end) %>%
+  summarize(min_rank = min(rank), .groups = "drop")
+
+# Process contour data
+seq_17_146_contour <- seq_17_146_kmer_df_rank %>%
+  rowwise() %>%
+  mutate(amino_acids = list(kmer_start:kmer_end)) %>%
+  unnest(amino_acids) %>%
+  dplyr::count(amino_acids) %>%
+  right_join(tibble(amino_acids = 1:nchar(seq_17_146)), by = "amino_acids") %>%
+  replace_na(list(n = 0)) %>%
+  mutate(amino_acids = amino_acids + 0.5) %>%
+  add_row(amino_acids = 1, n = 0, .before = 1) %>%
+  mutate(
+    n = ifelse(amino_acids == 1, lead(n), n),
+    amino_acids = ifelse(amino_acids == 100.5, 100, amino_acids)
+  )
+
+# Process kmer plot data
+kmer_17_146_p_data <- seq_17_146_kmer_df_rank %>%
+  group_by(kmer_end) %>%
+  summarise(
+    min_start = min(kmer_start),
+    kmer_start = list(kmer_start),
+    pep_num = n()
+  ) %>%
+  mutate(x_group = rep(1:3, c(8, 6, 5))) %>%
+  group_by(x_group) %>%
+  mutate(y_order = row_number()) %>%
+  unnest(kmer_start) %>%
+  mutate(pep_len = factor(kmer_end - kmer_start + 1, levels = 12:8)) %>%
+  group_by(kmer_end) %>%
+  arrange(pep_len) %>%
+  mutate(
+    block_order = row_number(),
+    y_min = y_order - 0.5 * b_w + (block_order - 1) * (b_w / 5),
+    y_max = y_min + (b_w / 5)
+  ) %>%
+  inner_join(
+    seq_17_146_kmer_df_rank %>% select(-kmer, -pep_len),
+    c("kmer_end", "kmer_start")
+  ) %>%
+  arrange(kmer_start, kmer_end)
+
+# Process detected peptides data
+seq_17_146_detected_df <- pep_nonc %>%
+  filter(protein_accession == "CONTRIB_GENCODE_c17norep146") %>%
+  inner_join(peptide, "peptide") %>%
+  dplyr::count(peptide, start_loc, end_loc) %>%
+  arrange(start_loc) %>%
+  mutate(
+    pep_len = nchar(peptide),
+    x_group = c(1, 2, 2, 3, 3, 3, 3, 3)
+  ) %>%
+  group_by(x_group) %>%
+  mutate(
+    y_order = row_number(),
+    y_min = y_order - 0.5 * b_w,
+    y_max = y_order + 0.5 * b_w
+  )
+
+rectangles <- seq_17_146_detected_df %>%
+  group_by(x_group) %>%
+  summarise(min = min(start_loc), max = max(end_loc), .groups = "drop")
+
+# Do not exclude kmers
+seq_17_146_kmer_df_rank_all <- seq_17_146_kmer_df %>%
+  mutate(pep_len = nchar(kmer)) %>%
+  group_by(pep_len) %>%
+  mutate(
+    kmer_start = row_number(),
+    kmer_end = row_number() + pep_len - 1
+  ) %>%
+  ungroup() %>%
+  left_join(
+    net_c17_146 %>%
+      inner_join(alleles_17_146, c("hla_type" = "hla_typing")),
+    c("kmer" = "peptide")
+  ) %>%
+  # filter(rank <= 2) %>%
+  group_by(kmer, pep_len, kmer_start, kmer_end) %>%
+  summarize(min_rank = min(rank), .groups = "drop")
+
+seq_17_146_detected_df %>% inner_join(
+  seq_17_146_kmer_df_rank_all,
+  c("start_loc" = "kmer_start", "end_loc" = "kmer_end")
+)
+
+# Create plots
+plot_17_146_pred <- ggplot() +
+  geom_rect(
+    data = rectangles,
+    aes(
+      xmin = min, xmax = max, ymin = 1 - b_w,
+      ymax = max(kmer_17_146_p_data$y_max), group = x_group
+    ),
+    alpha = 0.2, fill = brewer.pal(5, "Set1")[3]
+  ) +
+  geom_rect(
+    data = kmer_17_146_p_data,
+    aes(
+      xmin = kmer_start, xmax = kmer_end, ymin = y_min,
+      ymax = y_max, fill = min_rank
+    )
+  ) +
+  scale_fill_gradient(
+    name = "Minimum rank", low = grey_col[1],
+    high = grey_col[7], limits = c(0, 2),
+    breaks = c(0, 1, 2)
+  ) +
+  scale_x_continuous(labels = NULL, limits = c(1, nchar(seq_17_146)),
+                     expand = c(0, 0)) +
+  scale_y_continuous(limits = c(1 - b_w, NA), expand = c(0, 0)) +
+  remove_y +
+  theme(axis.line.y = element_blank(), axis.ticks.x = element_blank())
+
+plot_17_146_det <- ggplot() +
+  geom_rect(
+    data = rectangles,
+    aes(
+      xmin = min, xmax = max, ymin = 1 - b_w,
+      ymax = max(seq_17_146_detected_df$y_max), group = x_group
+    ),
+    alpha = 0.2, fill = brewer.pal(5, "Set1")[3]
+  ) +
+  geom_rect(
+    data = seq_17_146_detected_df,
+    aes(
+      xmin = start_loc, xmax = end_loc, ymin = y_min,
+      ymax = y_max, fill = n
+    )
+  ) +
+  scale_x_continuous(
+    limits = c(1, nchar(seq_17_146)), expand = c(0, 0),
+    breaks = 1:nchar(seq_17_146),
+    labels = ~ ifelse(.x %% 10 == 0, .x, ""),
+    name = seq_17_146
+  ) +
+  scale_fill_gradient(
+    name = "Number of\ndetections\nin MS-runs",
+    low = brewer.pal(9, "Greens")[6],
+    high = brewer.pal(9, "Greens")[9],
+    limits = c(0, NA)
+  ) +
+  scale_y_reverse(limits = c(NA, 1 - b_w)) +
+  remove_y +
+  theme(axis.line.y = element_blank())
+
+plot_17_146_shape <- ggplot(seq_17_146_contour) +
+  geom_step(aes(x = amino_acids, y = n), direction = "vh") +
+  scale_x_continuous(
+    limits = c(1, nchar(seq_17_146)), expand = c(0, 0),
+    labels = NULL, name = NULL
+  ) +
+  scale_y_continuous(name = NULL, expand = c(0, 0), breaks = c(0, 10, 20)) +
+  theme(axis.ticks.x = element_blank())
+
+figure_s10b <- plot_17_146_shape / plot_17_146_pred / plot_17_146_det
+
+ggsave("Figure_S10B.svg",
+  device = "svg", path = plot_dir, figure_s10b,
+  width = 2200, height = 1000, units = "px"
+)
+```
