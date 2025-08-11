@@ -23,7 +23,7 @@ suppressPackageStartupMessages({
 ## Load required data and define directories and files
 ```{r}
 utils::globalVariables(c("protein", "detected", "order_ids", "y_val",
-                         "fill_group", "fc"))
+                         "fill_group"))
 source("load_tables.R")
 source("load_peptideatlas_data.R")
 source("load_plot_aesthetics.R")
@@ -288,8 +288,8 @@ orf_pep_stats_count <- orf_pep_stats %>%
   pivot_longer(-orf_biotype) %>%
   mutate(name = factor(name, levels = c("n_pep", "n_orf")))
 
-# Get Riboseq quality from table S5
-orf_quality <- table_s5 %>%
+# Get Riboseq quality from supplementary table
+orf_quality <- hla_orf_table %>%
   filter(n_peptides_in_entry >= 2) %>%
   mutate(
     is_sufficient = Manual.inspection.of.GWIPS.Viz.RiboSeq.Data !=
@@ -482,7 +482,7 @@ figure_3a3 <- lapply(1:2, function(i) {
 })
 
 figure_3a <- lapply(1:6, function(i) {
-  one_plot <- c(figure_4A1, figure_4A2, figure_4A3)[[i]]
+  one_plot <- c(figure_3a1, figure_3a2, figure_3a3)[[i]]
   if (i <= 4) {
     one_plot <- one_plot + remove_x
   }
@@ -606,39 +606,6 @@ pep_pos_nonc <- pep_nonc %>%
 # Determine max y-axis range for plots
 can_lim <- c(0, pep_pos_can %>% filter(end_offset == 0) %>% nrow())
 nonc_lim <- c(0, pep_pos_nonc %>% filter(end_offset == 0) %>% nrow())
-
-perform_fisher_test <- function(df) {
-  # Function to perform Fisher's test
-  df$p_val <- fisher.test(df %>% select(-fc))$p.value
-  return(df)
-}
-
-process_data <- function(data, filter_condition, offset_col, numerator,
-                         denominator) {
-  # Compute fold change using the fiven conditions
-  data %>%
-    filter({{ filter_condition }}) %>%
-    ungroup() %>%
-    count(!!sym(offset_col)) %>%
-    pivot_wider(
-      names_from = !!sym(offset_col), values_from = n,
-      values_fill = 0
-    ) %>%
-    mutate(fc = !!sym(numerator) / !!sym(denominator))
-}
-
-# Compute statistics on fold changes
-start_fc <- lapply(list(pep_pos_can, pep_pos_nonc), function(i) {
-  process_data(i, start_offset <= 1, "start_offset", "1", "0")
-}) %>%
-  bind_rows() %>%
-  perform_fisher_test()
-
-end_fc <- lapply(list(pep_pos_can, pep_pos_nonc), function(i) {
-  process_data(i, end_offset >= -1, "end_offset", "0", "-1")
-}) %>%
-  bind_rows() %>%
-  perform_fisher_test()
 
 # Determine fold change and fisher exact test p-values for start and end offset
 fold_changes <- bind_rows(
@@ -798,8 +765,8 @@ ggsave("Figure_3D.svg",
 )
 ```
 
-# Figure S3 - HLA class and ncORF peptide origin
-## Figure S3A - Peptide classification
+# Figure S6 - HLA class and ncORF peptide origin
+## Figure S6A - Peptide classification
 ```{r}
 # Determine number of CDS and ncORF per length and HLA class category
 barplot_data <- peptide_hla %>%
@@ -995,17 +962,17 @@ p_overview_2b <- ggplot() +
     axis.text.y = element_blank()
   )
 
-figure_s3a <- p_overview_1 + p_overview_2a +
+figure_s6a <- p_overview_1 + p_overview_2a +
   plot_spacer() + p_overview_2b +
   plot_layout(widths = c(2, 2))
 
-ggsave("Figure_S3A.svg",
-  device = "svg", path = plot_dir, figure_s3a,
+ggsave("Figure_S6A.svg",
+  device = "svg", path = plot_dir, figure_s6a,
   width = 2000, height = 1300, units = "px"
 )
 ```
 
-## Figure S3B - Classification on protein/ORF level
+## Figure S6B - Classification on protein/ORF level
 ```{r}
 # Link peptides to source ncORF/CDS
 pep_pro <- bind_rows(
@@ -1031,7 +998,7 @@ protein_hla <- peptide_hla %>%
   dplyr::count(is_can, hla_class) %>%
   mutate(hla_class = factor(hla_class, levels = c("I", "Both", "II")))
 
-figure_s3b1 <- ggplot(
+figure_s6b1 <- ggplot(
   protein_hla %>% filter(is_can),
   aes(
     x = "Canonical\nproteins", y = n,
@@ -1047,7 +1014,7 @@ figure_s3b1 <- ggplot(
   scale_fill_manual(values = c(blue_col[1], grey_col[c(5, 3)]))
 
 
-figure_s3b2 <- ggplot(
+figure_s6b2 <- ggplot(
   protein_hla %>% filter(!is_can),
   aes(
     x = "Non-canonical\nORFs", y = n,
@@ -1070,10 +1037,10 @@ figure_s3b2 <- ggplot(
     )
   )
 
-figure_s3b <- figure_s3b1 + figure_s3b2
+figure_s6b <- figure_s6b1 + figure_s6b2
 ```
 
-## Figure S3C - Classification by peptide length
+## Figure S6C - Classification by peptide length
 ```{r}
 # Count peptides >14 aa and ≤ 14aa per HLA class for ncORF and CDS
 pep_class <- peptide_hla %>%
@@ -1093,7 +1060,7 @@ pep_class <- peptide_hla %>%
     hla_class = factor(hla_class, c("I", "Both", "II"))
   )
 
-figure_s3c <- ggplot(
+figure_s6c <- ggplot(
   pep_class,
   aes(hla_class, perc, group = pep_len, fill = pep_len)
 ) +
@@ -1110,7 +1077,7 @@ figure_s3c <- ggplot(
   facet_wrap(~pep_type)
 ```
 
-## Figure S3D - Graph length distribution per dataset
+## Figure S6D - Graph length distribution per dataset
 ```{r}
 # Determine relative length distribution split by HLA class
 peptide_lendis <- peptide_hla %>%
@@ -1126,7 +1093,7 @@ lendis_n <- peptide_lendis %>%
   dplyr::count(hla_class) %>%
   deframe()
 
-figure_s3d <- ggplot(
+figure_s6d <- ggplot(
   data = peptide_lendis %>% filter(p_len <= 30),
   aes(
     x = p_len, y = len_count_f, group = dataset_hla,
@@ -1158,11 +1125,11 @@ figure_s3d <- ggplot(
   )
 ```
 
-## Figure S3E - Compare HLA I vs II
+## Figure S6E - Compare HLA I vs II
 ```{r}
 # Group peptides in those exclusively found in HLA-I or not
 orf_hlaclass <- pep_nonc %>%
-  mutate(hla_class = ifelse(hla_class == "I", "I", "II"))
+  mutate(hla_class = ifelse(msrun_hla_classes == "I", "I", "II"))
 
 orf_hlaclass_count <- orf_hlaclass %>%
   dplyr::count(hla_class, orf_biotype) %>%
@@ -1185,7 +1152,7 @@ hla_n <- orf_hlaclass_count %>%
   dplyr::count(hla_class, wt = n) %>%
   deframe()
 
-figure_s3e <-
+figure_s6e <-
   ggplot(
     orf_hlaclass_count,
     aes(y = orf_biotype, x = n_adj, fill = hla_class)
@@ -1213,7 +1180,7 @@ figure_s3e <-
   theme(axis.line.y = element_blank(), axis.ticks.y = element_blank())
 ```
 
-## Figure S3F - Check HLA-II peptides
+## Figure S6F - Check HLA-II peptides
 
 ```{r}
 # Determine HLA class(es) per dataset
@@ -1286,7 +1253,7 @@ detection_count <- hlaii_orf_peptides_count %>%
   mutate(n = formatC(n, big.mark = ",")) %>%
   deframe()
 
-figure_s3f <- ggplot(
+figure_s6f <- ggplot(
   hlaii_orf_peptides_count,
   aes(y = peptide, x = n, fill = color)
 ) +
@@ -1317,24 +1284,24 @@ figure_s3f <- ggplot(
   )
 ```
 
-## Figure S3B-F - Combine
+## Figure S6B-F - Combine
 
 ```{r}
-figure_s3bf <- figure_s3b + figure_s3c + figure_s3d + figure_s3e +
-  free(figure_s3f) +
+figure_s6bf <- figure_s6b + figure_s6c + figure_s6d + figure_s6e +
+  free(figure_s6f) +
   plot_layout(
     design = "ABFFF\nCCFFF\nDDFFF\nEEFFF",
     guides = "collect"
   )
 
-ggsave("figure_S3BF.svg",
-  device = "svg", path = plot_dir, figure_s3bf,
+ggsave("figure_S6BF.svg",
+  device = "svg", path = plot_dir, figure_s6bf,
   width = 3200, height = 2500, units = "px"
 )
 ```
 
-# Figure S4 - ORF statistics
-## Figure S4A-D - ORF overview
+# Figure S7 - ORF statistics
+## Figure S7A-D - ORF overview
 ```{r}
 # Determine percentage detected ncORFs per biotype
 orf_pep_stats_ref <- orf_pep_stats %>%
@@ -1383,7 +1350,7 @@ orf_len_enrichment <- orf_pep_stats_len %>%
   pivot_wider(names_from = cat, values_from = perc) %>%
   mutate(enrichment = (high - low) / high)
 
-figure_s4a <- ggplot(
+figure_s7a <- ggplot(
   orf_pep_stats_ref,
   aes(fill = is_det, y = n, x = orf_biotype)
 ) +
@@ -1393,7 +1360,7 @@ figure_s4a <- ggplot(
   scale_fill_manual(values = green_col[c(4, 1)]) +
   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
 
-figure_s4b <- ggplot(
+figure_s7b <- ggplot(
   orf_pep_stats_ref,
   aes(fill = is_det, y = perc, x = orf_biotype)
 ) +
@@ -1408,7 +1375,7 @@ figure_s4b <- ggplot(
   geom_linerange(aes(ymin = conf_low, ymax = conf_high)) +
   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
 
-figure_s4c <- ggplot(
+figure_s7c <- ggplot(
   orf_pep_stats_len,
   aes(fill = is_det, y = n, x = len_cat)
 ) +
@@ -1418,7 +1385,7 @@ figure_s4c <- ggplot(
   scale_fill_manual(values = green_col[c(4, 1)]) +
   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
 
-figure_s4d <- ggplot(
+figure_s7d <- ggplot(
   orf_pep_stats_len,
   aes(fill = is_det, y = perc, x = len_cat)
 ) +
@@ -1432,16 +1399,16 @@ figure_s4d <- ggplot(
   geom_linerange(aes(ymin = conf_low, ymax = conf_high)) +
   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
 
-figure_s4ad <- figure_s4a + figure_s4b + figure_s4c + figure_s4d +
+figure_s7ad <- figure_s7a + figure_s7b + figure_s7c + figure_s7d +
   plot_layout(nrow = 1)
 
-ggsave("Figure_S4AD.svg",
-  device = "svg", path = plot_dir, figure_s4ad,
+ggsave("Figure_S7AD.svg",
+  device = "svg", path = plot_dir, figure_s7ad,
   width = 2340, height = 1000, units = "px"
 )
 ```
 
-## Figure S4E - Compare cancer vs non-cancer with cancer genes
+## Figure S7E - Compare cancer vs non-cancer with cancer genes
 ```{r}
 cancer_census <- read_csv(cancer_census_file)
 colnames(cancer_census) <- str_replace_all(colnames(cancer_census), " ", "_")
@@ -1524,7 +1491,7 @@ cancergene_count <- orf_cancer_count %>%
   sum() %>%
   paste0("(n = ", ., " peptides)")
 
-figure_s4e <-
+figure_s7e <-
   ggplot(orf_cancer_count, aes(x = x_axis, y = perc, fill = color)) +
   geom_bar(stat = "identity", position = "stack") +
   scale_fill_identity(
@@ -1554,13 +1521,13 @@ figure_s4e <-
     strip.text.x = element_blank()
   )
 
-ggsave("Figure_S4E.svg",
-  device = "svg", path = plot_dir, figure_s4e,
+ggsave("Figure_S7E.svg",
+  device = "svg", path = plot_dir, figure_s7e,
   width = 1400, height = 1200, units = "px"
 )
 ```
 
-## Figure S4F - Compare on peptide level
+## Figure S7F - Compare on peptide level
 ```{r}
 neworf_cancer <- orf_cancer %>%
   distinct(peptide, is_cancer) %>%
@@ -1570,7 +1537,9 @@ neworf_cancer <- orf_cancer %>%
   dplyr::rename(peptide = protein) %>%
   mutate(weight = mw(peptide) / len)
 
-figure_s4f1 <- create_dis_plot(
+cancer_colors <- c(blue_col[2], grey_col[4], blue_col[6])
+
+figure_s7f1 <- create_dis_plot(
   ggplot(
     neworf_cancer,
     aes(x = len, color = is_cancer)
@@ -1578,7 +1547,7 @@ figure_s4f1 <- create_dis_plot(
   "Peptide length", cancer_colors
 )
 
-figure_s4f2 <- create_dis_plot(
+figure_s7f2 <- create_dis_plot(
   ggplot(
     neworf_cancer,
     aes(x = weight, color = is_cancer)
@@ -1587,7 +1556,7 @@ figure_s4f2 <- create_dis_plot(
   y_name = element_blank()
 )
 
-figure_s4f3 <- create_dis_plot(
+figure_s7f3 <- create_dis_plot(
   ggplot(
     neworf_cancer,
     aes(x = hydro, color = is_cancer)
@@ -1595,7 +1564,7 @@ figure_s4f3 <- create_dis_plot(
   "Hydrophobicity (Kyte-Doolittle)", cancer_colors
 )
 
-figure_s4f4 <- create_dis_plot(
+figure_s7f4 <- create_dis_plot(
   ggplot(
     neworf_cancer,
     aes(x = pi, color = is_cancer)
@@ -1604,19 +1573,19 @@ figure_s4f4 <- create_dis_plot(
   y_name = element_blank()
 )
 
-figure_s4f <- wrap_plots(
-  list(figure_s4f1, figure_s4f2, figure_s4f3, figure_s4f4),
+figure_s7f <- wrap_plots(
+  list(figure_s7f1, figure_s7f2, figure_s7f3, figure_s7f4),
   ncol = 2, nrow = 2
 )
 
-ggsave("Figure_S4F.svg",
-  device = "svg", path = plot_dir, figure_s4f,
+ggsave("Figure_S7F.svg",
+  device = "svg", path = plot_dir, figure_s7f,
   width = 1200, height = 1200, units = "px"
 )
 ```
 
-# Figure S5 - Hydrophobicity and expression
-## Figure S5C - Hydrophobicity at ncORF ends
+# Figure S8 - Hydrophobicity and expression
+## Figure S8C - Hydrophobicity at ncORF ends
 ```{r}
 h_lab <- "Hydrophobicity\n(Kyte-Doolittle)"
 h_cats <- c("Non-canonical__start", "Non-canonical__end")
@@ -1638,7 +1607,7 @@ p_vals_start_end <-
   get_pvals_holms() %>%
   arrange(desc(name))
 
-figure_s5c_plots <- lapply(1:2, function(i) {
+figure_s8c_plots <- lapply(1:2, function(i) {
   cat <- h_cats[i]
   plot_data <- seq_stats_properties %>%
     filter(pro_cat == cat) %>%
@@ -1649,16 +1618,16 @@ figure_s5c_plots <- lapply(1:2, function(i) {
   )
 })
 
-figure_s5c_plots[[2]] <- figure_s5c_plots[[2]] + remove_y
-figure_s5c <- wrap_plots(figure_s5c_plots, ncol = 2)
+figure_s8c_plots[[2]] <- figure_s8c_plots[[2]] + remove_y
+figure_s8c <- wrap_plots(figure_s8c_plots, ncol = 2)
 
-ggsave("Figure_S5C.svg",
-  device = "svg", path = plot_dir, figure_s5c,
+ggsave("Figure_S8C.svg",
+  device = "svg", path = plot_dir, figure_s8c,
   width = 600, height = 300, units = "px"
 )
 ```
 
-## Figure S5D - Hydrophobicity per biotype
+## Figure S8D - Hydrophobicity per biotype
 ```{r}
 # Group seq_stats_hydro by CDS and ncORF biotype
 seq_stats_hydro_biotype <- seq_stats_hydro %>%
@@ -1679,7 +1648,7 @@ seq_stats_hydro_biotype <- seq_stats_hydro %>%
     )
   ))
 
-figure_s5d <- ggplot(
+figure_s8d <- ggplot(
   seq_stats_hydro_biotype,
   aes(x = c_offset, y = hydro, group = detected)
 ) +
@@ -1702,13 +1671,13 @@ figure_s5d <- ggplot(
   scale_color_manual(values = c(green_col[1], blue_col[2])) +
   facet_wrap(~orf_biotype, ncol = 4)
 
-ggsave("figure_S5D.svg",
-  device = "svg", path = plot_dir, figure_s5d,
+ggsave("figure_S8D.svg",
+  device = "svg", path = plot_dir, figure_s8d,
   width = 2516.16, height = 900, units = "px"
 )
 ```
 
-## Figure S5E - Expression per biotype
+## Figure S8E - Expression per biotype
 ```{r}
 orf_gtex_split <- orf_gtex %>%
   make_biotype_levels() %>%
@@ -1737,15 +1706,15 @@ gtex_violins_f <- lapply(1:7, function(i) {
   return(one_plot)
 })
 
-figure_s5e <- wrap_plots(gtex_violins_f, nrow = 1)
+figure_s8e <- wrap_plots(gtex_violins_f, nrow = 1)
 
-ggsave("figure_S5E.svg",
-  device = "svg", path = plot_dir, figure_s5e,
+ggsave("figure_S8E.svg",
+  device = "svg", path = plot_dir, figure_s8e,
   width = 2300, height = 600, units = "px"
 )
 ```
 
-## Figure S5F - Expression per tissue
+## Figure S8F - Expression per tissue
 ```{r}
 # Process GTEX data to longer format with improved names
 gtex_tissue <- gtex_data %>%
@@ -1783,7 +1752,7 @@ p_tissue <- orf_gtex_tissue %>%
   p.adjust(method = "holm")
 max(p_tissue)
 
-figure_s5f <- ggplot(orf_gtex_tissue, aes(detected, fpkm, color = detected)) +
+figure_s8f <- ggplot(orf_gtex_tissue, aes(detected, fpkm, color = detected)) +
   geom_boxplot(outliers = FALSE) +
   scale_y_continuous(
     trans = scales::pseudo_log_trans(base = 10),
@@ -1794,8 +1763,8 @@ figure_s5f <- ggplot(orf_gtex_tissue, aes(detected, fpkm, color = detected)) +
   facet_wrap(~tissue, nrow = 1) +
   scale_color_manual(values = green_col[c(1, 4)])
 
-ggsave("Figure_S5F.svg",
-  device = "svg", path = plot_dir, figure_s5f,
+ggsave("Figure_S8F.svg",
+  device = "svg", path = plot_dir, figure_s8f,
   width = 2300, height = 600, units = "px"
 )
 ```
