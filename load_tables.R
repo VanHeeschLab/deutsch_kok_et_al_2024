@@ -74,10 +74,10 @@ orf_sequences <- read_excel(orf_file, sheet = 3)[
     orf_biotype = str_replace(orf_biotype, "ORF", "ORFs"),
     protein_accession = paste0("CONTRIB_GENCODE_", orf_name),
   ) %>%
-  dplyr::rename(protein = orf_sequence, phylocsf = `PhyloCSF (120 mammals)`) %>% 
+  dplyr::rename(protein = orf_sequence, phylocsf = `PhyloCSF (120 mammals)`) %>%
   mutate(phylocsf = as.numeric(phylocsf))
 
-# Annoation data of the MS-runs
+# Annotation data of the MS-runs
 annotations <- read_excel(table_s8_file) %>%
   rename(dataset_id = dataset, ms_name = ms_run_name, hla_class = HLA_class) %>%
   mutate(
