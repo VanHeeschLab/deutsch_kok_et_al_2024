@@ -1,5 +1,5 @@
 ---
-title: "Script to determine number of ncORFs per tier and how many are peptideins"
+title: "Script to create overview of Tier and Protein/Peptidein assignments"
 output: html_document
 author: "Leron Kok"
 ---
@@ -28,6 +28,7 @@ table_s12_file <- file.path(raw_dir, "20250801_VanHeesch_EDtable12.xlsx")
 # Figure 5 - Tiers and peptideins
 ## Figure 5B - Tier assignment
 ```{r}
+# Get initial and final tier levels from non-hla and hla extended data tables
 tiers <- nonhla_orf_table %>%
   select(orf_name, initial_tier, final_tier) %>%
   bind_rows(hla_orf_table %>%
@@ -99,6 +100,7 @@ ggsave("Figure_5B.svg",
 
 ## Figure 5C - Tier 1A breakdown
 ```{r}
+# Create subgroup of ncORFs with inital Tier 1A
 data_5c <- tiers %>%
   filter(initial_tier == "Tier 1A") %>%
   mutate(
@@ -130,15 +132,19 @@ ggsave("Figure_5c.svg",
 
 ## Figure 5E - Peptidein counts
 ```{r}
+# Read Peptidein and Protein assignments from supplementary tables
 peptidein_table <- read_excel(table_s12_file) %>%
-  dplyr::rename(orf_name = "Ribo-Seq_ORF",
-                final_tier = "Final.tier.for.level.of.evidence") %>%
+  dplyr::rename(
+    orf_name = "Ribo-Seq_ORF",
+    final_tier = "Final.tier.for.level.of.evidence"
+  ) %>%
   mutate(category = case_when(
     str_detect(`annotation decision`, "protein") ~ "Protein",
     str_detect(`annotation decision`, "peptidein") ~ "Peptidein",
     .default = "other"
   ))
 
+# Combine peptidein assignment with tier levels
 tier_peptidein <- tiers %>%
   left_join(
     hla_orf_table %>% select(orf_name, n_peptides_in_entry),
@@ -153,10 +159,13 @@ tier_peptidein <- tiers %>%
   ) %>%
   replace_na(list(n_peptides_in_entry = 0))
 
+# Determine per Tier number of inspected candidates,
+#  and number of Proteins/Peptideins
 tier_peptidein %>%
   filter(!is.na(category)) %>%
   dplyr::count(final_tier, category)
 
+# Number of Peptideins with non-HLA and HLA support
 tier_peptidein %>%
   filter(category == "Peptidein") %>%
   dplyr::count(`non-HLA peptides`, `HLA peptides`, category)
