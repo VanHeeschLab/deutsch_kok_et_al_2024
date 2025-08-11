@@ -114,7 +114,7 @@ if (file.exists(filtered_peptides_file)) {
 # Prepare condensed noncanonical peptide annotation (one ncORF pep peptide)
 pep_nonc <- pep_nonc_long %>%
   inner_join(
-    table_s4 %>%
+    hla_peptide_table %>%
       select(-c(orf_name, transcript, starts, ends, orf_biotype, gene_name,
                 gene_id, strand, chrm)) %>%
       dplyr::rename(other_mappings = "Other.mappings"),
