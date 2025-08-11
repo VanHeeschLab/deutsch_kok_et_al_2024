@@ -3,18 +3,29 @@
 library(tidyverse)
 library(here)
 library(patchwork)
+library(scales)
 ```
 # Load data
 ```{r}
 source("load_tables.R")
 source("load_plot_aesthetics.R")
+
+processed_dir <- here("processed")
+plot_dir <- file.path(processed_dir, "plots")
+
+engine_protease_compare_file <-
+  file.path(raw_dir, "20250318_PXD010154_results.xlsx")
+fdr_compare_file <-
+  file.path(raw_dir, "20250318_R2R_build_different_FDRs.xlsx")
+ubiquitination_file <- file.path(raw_dir, "20250801_VanHeesch_EDtable5.xlsx")
 ```
 
-# Figure 2 - nonHLA figures
-
+# Figure 2 - nonHLA data filtering
+## Figure 2A - Peptide count
 ```{r}
-nonhla_count <- table_s2 %>%
+nonhla_count <- nonhla_peptide_table %>%
   select(-orf_biotype) %>%
+  # Use biotype naming as in orf_sequences table
   inner_join(orf_sequences %>%
                select(orf_name, orf_biotype), "orf_name") %>%
   dplyr::count(orf_name, orf_biotype) %>%
@@ -27,46 +38,26 @@ nonhla_count <- table_s2 %>%
   ) %>%
   make_biotype_levels()
 
-nonhla_count_group <- nonhla_count %>%
-  filter(name != "n_pep") %>%
-  group_by(name) %>%
-  summarise(value = sum(value))
-
-val_count <- nonhla_count %>%
-  dplyr::count(name, wt = value) %>%
-  inner_join(data.frame(name = c("n_orf_2", "n_orf_1"),
-                        n_val = c(30, 36)), "name") %>%
-  mutate(n_nonval = n - n_val) %>%
-  select(-n) %>%
-  column_to_rownames("name") %>%
-  t() %>%
-  data.frame() %>%
-  rownames_to_column("label") %>%
-  mutate(
-    ypos2 = cumsum(n_orf_2) - 0.5 * n_orf_2,
-    ypos1 = cumsum(n_orf_1) - 0.5 * n_orf_1
-  )
-
-nonhla_pep_count <- table_s3 %>%
-  filter(HPP.Category %in% c("HPP+", "1PepCandidate")) %>%
-  mutate(
-    n_pep = ifelse(n_peptides_in_entry > 4, ">4", n_peptides_in_entry),
-    n_pep = factor(n_pep, c(1, 2, 3, 4, ">4"))
-  ) %>%
-  dplyr::count(n_pep)
-
-figure_2A <- ggplot() +
+figure_2a <- ggplot() +
   geom_bar(
     data = nonhla_count %>% filter(name == "n_pep"),
     aes(x = orf_biotype, y = value, fill = name),
-    stat = "identity", show.legend = F
+    stat = "identity", show.legend = FALSE
   ) +
   scale_x_discrete(name = element_blank(), expand = c(0, 0)) +
   scale_y_continuous(name = "Number of peptides", expand = c(0, 0)) +
   scale_fill_manual(values = blue_col[3]) +
   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+```
 
-figure_2B1 <- ggplot() +
+## Figure 2B - ncORF count
+```{r}
+nonhla_count_group <- nonhla_count %>%
+  filter(name != "n_pep") %>%
+  group_by(name) %>%
+  summarise(value = sum(value))
+
+figure_2b1 <- ggplot() +
   geom_bar(
     data = nonhla_count %>% filter(name != "n_pep"),
     aes(x = orf_biotype, y = value, fill = name),
@@ -75,7 +66,7 @@ figure_2B1 <- ggplot() +
   scale_x_discrete(name = element_blank(), expand = c(0, 0)) +
   scale_y_continuous(name = "Number of ncORFs", expand = c(0, 0)) +
   scale_fill_manual(
-    values = green_col[c(6, 1)],
+    values = blue_col[c(8, 1)],
     labels = c(
       "Multiple peptide detections",
       "Single peptide detections"
@@ -84,28 +75,47 @@ figure_2B1 <- ggplot() +
   ) +
   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
 
-figure_2B2 <- ggplot() +
+figure_2b2 <- ggplot() +
   geom_bar(
     data = nonhla_count_group,
     aes(x = "", y = value, fill = name),
-    stat = "identity", position = "stack", show.legend = F
+    stat = "identity", position = "stack", show.legend = FALSE
   ) +
   scale_x_discrete(name = element_blank(), expand = c(0, 0)) +
   scale_y_continuous(name = "Number of ncORFs", expand = c(0, 0)) +
-  scale_fill_manual(values = green_col[c(6, 1)]) +
+  scale_fill_manual(values = blue_col[c(8, 1)]) +
   theme(
     axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
     axis.ticks.x = element_blank()
   )
+```
 
-figure_2C1 <- ggplot(val_count, aes(x = "", y = n_orf_2, fill = label)) +
+## Figure 2C - Manual inspection
+```{r}
+val_count <- nonhla_orf_table %>%
+  mutate(
+    n_pep = ifelse(n_peptides_in_entry == 1, "n_orf_1", "n_orf_2"),
+    pass_inspection = HPP.Category %in% c("HPP+", "1PepCandidate")
+  ) %>%
+  dplyr::count(n_pep, pass_inspection) %>%
+  pivot_wider(names_from = n_pep, values_from = n) %>%
+  arrange(desc(pass_inspection)) %>%
+  mutate(
+    ypos2 = cumsum(n_orf_2) - 0.5 * n_orf_2,
+    ypos1 = cumsum(n_orf_1) - 0.5 * n_orf_1
+  )
+
+figure_2c1 <- ggplot(val_count, aes(
+  x = "", y = n_orf_2,
+  fill = pass_inspection
+)) +
   geom_bar(stat = "identity", width = 1, color = "white") +
   coord_polar("y", start = 0, direction = 1) +
   theme_void() +
   theme(legend.text = element_text(size = 7, colour = "black")) +
   geom_text(aes(y = ypos2, label = n_orf_2), color = "black", size = 7 / .pt) +
   scale_fill_manual(
-    values = c(pink_col[4], green_col[4]),
+    values = c(pink_col[4], blue_col[6]),
     name = element_blank(),
     labels = c(
       "Insufficient\nevidence",
@@ -113,37 +123,258 @@ figure_2C1 <- ggplot(val_count, aes(x = "", y = n_orf_2, fill = label)) +
     )
   )
 
-figure_2C2 <- ggplot(val_count, aes(x = "", y = n_orf_1, fill = label)) +
+figure_2c2 <- ggplot(val_count, aes(
+  x = "", y = n_orf_1,
+  fill = pass_inspection
+)) +
   geom_bar(stat = "identity", width = 1, color = "white") +
   coord_polar("y", start = 0, direction = 1) +
   theme_void() +
   theme(legend.text = element_text(size = 7, colour = "black")) +
   geom_text(aes(y = ypos1, label = n_orf_1), color = "black", size = 7 / .pt) +
   scale_fill_manual(
-    values = c(pink_col[4], green_col[4]),
+    values = c(pink_col[4], blue_col[6]),
     name = element_blank(),
     labels = c(
       "Insufficient\nevidence",
       "Passing\ninspection"
     )
   )
+```
 
-figure_2D <- ggplot(nonhla_pep_count, aes(y = n, x = n_pep)) +
+## Figure 2D - ORFs passing inspection
+```{r}
+nonhla_pep_count <- nonhla_orf_table %>%
+  filter(HPP.Category %in% c("HPP+", "1PepCandidate")) %>%
+  mutate(
+    n_pep = ifelse(n_peptides_in_entry > 4, ">4", n_peptides_in_entry),
+    n_pep = factor(n_pep, c(1, 2, 3, 4, ">4"))
+  ) %>%
+  dplyr::count(n_pep)
+
+figure_2d <- ggplot(nonhla_pep_count, aes(y = n, x = n_pep)) +
   geom_bar(
-    position = "stack", stat = "identity", show.legend = F,
-    fill = green_col[4]
+    position = "stack", stat = "identity", show.legend = FALSE,
+    fill = blue_col[6]
   ) +
   scale_x_discrete(name = "Number of distinct peptides", expand = c(0, 0)) +
   scale_y_continuous(name = "Number of non-canonical ORFs", expand = c(0, 0)) +
   geom_text(aes(label = n), size = 6 / .pt)
+```
 
-figure_2 <- figure_2A + figure_2B1 + figure_2B2 + (figure_2C1 / figure_2C2) +
-  figure_2D + plot_layout(guides = "collect", widths = c(7, 7, 1, 10, 5))
+## Figure 2A-D - Combine
+```{r}
+figure_2ad <- figure_2a + figure_2b1 + figure_2b2 + (figure_2c1 / figure_2c2) +
+  figure_2d + plot_layout(guides = "collect", widths = c(7, 7, 1, 10, 5))
 
-ggsave("Figure_2.svg",
-  device = "svg", path = plot_dir, figure_2,
+ggsave("Figure_2AD.svg",
+  device = "svg", path = plot_dir, figure_2ad,
   width = 2600, height = 900, units = "px"
 )
 ```
 
+# Figure S2 - nonHLA comparisons
+## Figure S2A - Different search all peptide count
+```{r}
+figure_s2a <-
+  read_excel(engine_protease_compare_file, sheet = 1) %>%
+  mutate(
+    engine = factor(engine, c("Combined engines", "MSFragger", "Comet"))
+  ) %>%
+  ggplot(aes(all_peptide_FDR, n_peptides, color = engine)) +
+  geom_line() +
+  geom_point() +
+  scale_x_continuous(
+    name = "Decoy-based peptide FDR",
+    labels = label_comma(),
+    limits = c(0, 6.00001e-4), expand = c(0, 0)
+  ) +
+  scale_y_continuous(
+    name = "Number of peptides",
+    labels = scales::label_number(
+      scale_cut = scales::cut_short_scale()
+    ),
+    limits = c(0, NA),
+    expand = expansion(c(0, 0.05), c(0, 0))
+  ) +
+  scale_color_manual(
+    values = c(grey_col[3], green_col[4], pink_col[2]),
+    name = "Search engine"
+  )
+```
 
+## Figure S2B - Different search ncORF peptide count
+```{r}
+figure_s2b <-
+  read_excel(engine_protease_compare_file, sheet = 2) %>%
+  mutate(
+    engine = factor(engine, c("Combined engines", "MSFragger", "Comet"))
+  ) %>%
+  ggplot(aes(all_peptide_FDR, n_ncorf_peptide, color = engine)) +
+  geom_line() +
+  geom_point() +
+  scale_x_continuous(
+    name = "Decoy-based peptide FDR",
+    labels = label_comma(),
+    limits = c(0, 6.00001e-4), expand = c(0, 0)
+  ) +
+  scale_y_continuous(
+    name = "Number of peptides",
+    labels = scales::label_number(
+      scale_cut = scales::cut_short_scale()
+    ),
+    limits = c(0, NA),
+    expand = expansion(c(0, 0.05), c(0, 0))
+  ) +
+  scale_color_manual(
+    values = c(grey_col[3], green_col[4], pink_col[2]),
+    name = "Search engine"
+  )
+```
+  
+## Figure S2CD - Different FDR ncORF PSM
+```{r}
+fdr_compare <-
+  read_excel(fdr_compare_file, sheet = 1) %>%
+  mutate(
+    Threshold_num = str_replace(Threshold, "Release", "0.9991") %>%
+      as.numeric(),
+    Threshold = str_replace(Threshold, "0.99729.*", "0.9973")
+  ) %>%
+  select(Threshold, Threshold_num, n_ncORF_PSMs, n_decoy_PSMs) %>%
+  pivot_longer(c(n_ncORF_PSMs, n_decoy_PSMs)) %>%
+  group_by(name) %>%
+  mutate(
+    perc_inc = value / min(value) * 100 - 100,
+    name = factor(name, c("n_ncORF_PSMs", "n_decoy_PSMs"))
+  )
+
+figure_s2c <-
+  ggplot(fdr_compare, aes(Threshold_num, value, color = name)) +
+  geom_line() +
+  geom_point() +
+  scale_x_continuous(
+    breaks = fdr_compare$Threshold_num,
+    labels = fdr_compare$Threshold,
+    limits = c(NA, max(fdr_compare$Threshold_num)),
+    expand = expansion(c(0.05, 0), 0),
+    name = "Probability threshold"
+  ) +
+  scale_y_continuous(
+    name = "Number of PSMs",
+    limits = c(0, NA),
+    expand = expansion(c(0, 0.05), 0)
+  ) +
+  scale_color_manual(
+    values = c(blue_col[4], purple_col[1]),
+    name = element_blank(),
+    labels = c("ncORF PSMs", "Decoy PSMs")
+  ) +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))
+
+figure_s2d <-
+  ggplot(fdr_compare, aes(Threshold_num, perc_inc, color = name)) +
+  geom_line() +
+  geom_point() +
+  scale_x_continuous(
+    breaks = fdr_compare$Threshold_num,
+    labels = fdr_compare$Threshold,
+    limits = c(NA, max(fdr_compare$Threshold_num)),
+    expand = expansion(c(0.05, 0), 0),
+    name = "Probability threshold"
+  ) +
+  scale_y_continuous(
+    name = "Percentage increase in detections",
+    label = label_percent(scale = 1)
+  ) +
+  scale_color_manual(
+    values = c(blue_col[4], purple_col[1]),
+    name = element_blank(),
+    labels = c("ncORF PSMs", "Decoy PSMs")
+  ) +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))
+```
+
+## Figure S2F - Ubiquitination
+```{r}
+ubiq_data <- read_excel(ubiquitination_file, sheet = "Table D") %>%
+  filter(row_number() <= 28) %>% # Remove comments in table
+  dplyr::count(Protein, wt = count) %>%
+  left_join(nonhla_orf_table %>%
+              select(orf_name) %>%
+              mutate(nonhla = TRUE), c("Protein" = "orf_name")) %>%
+  left_join(hla_orf_table %>%
+              select(orf_name) %>%
+              mutate(hla = TRUE), c("Protein" = "orf_name")) %>%
+  replace_na(list(hla = FALSE, nonhla = FALSE)) %>%
+  mutate(
+    cat = case_when(
+      hla & nonhla ~ "HLA & non-HLA",
+      hla ~ "Only HLA",
+      .default = "No"
+    ) %>% factor(c("No", "Only HLA", "HLA & non-HLA")),
+    num_psm = cut(n,
+      breaks = c(0, 5, 10, 15, 100),
+      labels = c("1 - 5", "6 - 10", "11 - 15", "16 - 23")
+    )
+  )
+
+figure_s2f <- ggplot(ubiq_data, aes(num_psm, fill = cat)) +
+  geom_bar() +
+  scale_x_discrete(
+    name = "Number of PSMs",
+    expand = c(0, 0)
+  ) +
+  scale_y_continuous(
+    name = "Number of ncORFs",
+    expand = c(0, 0),
+    breaks = seq(0, 8, 2)
+  ) +
+  scale_fill_manual(
+    values = c(red_col, blue_col[4], green_col[2]),
+    name = "Detected in\nPeptideAtlas build"
+  )
+```
+## Figure S2G - Different protease ncORF peptide count
+```{r}
+figure_s2g <-
+  read_excel(engine_protease_compare_file, sheet = 3) %>%
+  mutate(
+    protease =
+      factor(protease, c("Combined proteases", "Other proteases", "Trypsin"))
+  ) %>%
+  ggplot(aes(all_peptide_FDR, n_ncorf_peptide, color = protease)) +
+  geom_line() +
+  geom_point() +
+  scale_x_continuous(
+    name = "Decoy-based peptide FDR",
+    labels = label_comma(),
+    limits = c(0, NA),
+    expand = expansion(c(0, 0.05), c(0, 0))
+  ) +
+  scale_y_continuous(
+    name = "Number of peptides",
+    labels = scales::label_number(
+      scale_cut = scales::cut_short_scale()
+    ),
+    limits = c(0, NA),
+    expand = expansion(c(0, 0.05), c(0, 0))
+  ) +
+  scale_color_manual(
+    values = c(grey_col[5], green_col[6], pink_col[3]),
+    name = "Protease"
+  )
+```
+
+## Figure S2A-G - Combine 
+```{r}
+layout <- "AABBCC\nDDDEEE"
+
+figure_s2ag <- (figure_s2a | figure_s2b) / (figure_s2c | figure_s2d) /
+  (figure_s2f | figure_s2g)
+
+ggsave("figure_S2AG.svg",
+  device = "svg", path = plot_dir, figure_s2ag,
+  width = 240, height = 180, units = "mm"
+)
+```
