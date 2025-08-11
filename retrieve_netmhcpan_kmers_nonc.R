@@ -1,10 +1,9 @@
+# Script to process binding predictions on ncORF 9mers
 library(tidyverse)
+library(here)
 
-work_dir <- paste0("/hpc/pmc_vanheesch/projects/Leron/",
-                   "20221122_EpitopePrediction/20221122_EpitopePrediction")
-processed_dir <- paste0(work_dir, "/processed")
-
-
+processed_dir <- here("processed")
+# Load Rds file created by 'Figures_BindingPredictions.Rmd'
 load(file.path(processed_dir, "retrieve_net_kmers_data.Rds"))
 
 read_netmhcpan_nonc <- function(net_path) {
@@ -18,9 +17,11 @@ read_netmhcpan_nonc <- function(net_path) {
   return(rank_data)
 }
 
+# Read netmhcpan output files and combine results
 net_kmers_nonc <- lapply(net_files, read_netmhcpan_nonc) %>% bind_rows() %>% 
   mutate(hla_type = str_replace(allele, "HLA", ""),
          hla_type = str_replace_all(hla_type, "[.]", "")) %>% 
   select(-allele)
 
+# Save results as Rds file for usage by 'Figures_BindingPredictions.Rmd'
 saveRDS(net_kmers_nonc, file = file.path(processed_dir, "net_kmers_nonc.Rds"))
