@@ -557,20 +557,6 @@ orbl_ncorfs <- read_delim(orbl_ncorf_file, delim = "\t") %>%
 # PhyloCSF scores
 phylocsf_scores <- orf_sequences %>%
   mutate(phylocsf_codon = phylocsf / nchar(protein))
-sandmann_data <- read_excel(sandmann_file) %>%
-  mutate(
-    phylocsf = as.numeric(`PhyloCSF mammals`),
-    phylo_cat = case_when(
-      is.na(phylocsf) ~ "Undefined",
-      phylocsf > 0 ~ "PhyloCSF > 0",
-      phylocsf <= 0 ~ "PhyloCSF ≤ 0"
-    ),
-    phylo_col = case_when(
-      is.na(phylocsf) ~ "white",
-      phylocsf > 0 ~ green_col[3],
-      phylocsf <= 0 ~ grey_col[9]
-    )
-  )
 
 # Combine ORBL and PhyloCSF scores
 orbl_phylocsf <- orbl_ncorfs %>%
@@ -837,7 +823,7 @@ msa_species <- read_excel(msa_species_file) %>%
   mutate(fill = case_match(
     clade,
     "Human" ~ "white",
-    "Primate" ~ "#BCBFC1",
+    "Primatomorpha" ~ "#BCBFC1",
     "Glires" ~ "#BB282D80",
     "Cetartiodactyla" ~ "#BB282D99",
     "Perissodactyla" ~ "#BB282DB2",
@@ -947,7 +933,7 @@ figure_s6e <-
 figure_s6be <- figure_s6b + figure_s6c + figure_s6d +
   figure_s6e + plot_layout(nrow = 2, guides = "collect")
 
-ggsave("Figure_S6BG.svg",
+ggsave("Figure_S6BE.svg",
   device = "svg", path = plot_dir, figure_s6bg,
   width = 250, height = 120, units = "mm"
 )
