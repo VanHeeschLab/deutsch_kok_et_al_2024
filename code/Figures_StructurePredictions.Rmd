@@ -120,7 +120,7 @@ figure_s12bd <- struct_df %>%
   )) %>%
   split(~name) %>%
   lapply(function(df) {
-    create_structure_violin(df, "value", df$name[1], 200, seq(0, 100, 25))
+    create_structure_violin(df, "value", df$name[1], c(0, 200), seq(0, 100, 25))
   })
 
 figure_s12ad <- figure_s12a + figure_s12bd + plot_layout(nrow = 1)
