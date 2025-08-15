@@ -28,8 +28,8 @@ utils::globalVariables(c(
   "frame_ref", "is_begin", "cod_num", "pos", "codon",
   "color", "y_index", "species", "aa", "is_conserved"
 ))
-source("load_tables.R")
-source("load_plot_aesthetics.R")
+if (!exists("hla_orf_table")) source(here("code/load_tables.R"))
+if (!exists("remove_x")) source(here("code/load_plot_aesthetics.R"))
 
 processed_dir <- here("processed")
 plot_dir <- file.path(processed_dir, "plots")
@@ -934,7 +934,7 @@ figure_s6be <- figure_s6b + figure_s6c + figure_s6d +
   figure_s6e + plot_layout(nrow = 2, guides = "collect")
 
 ggsave("Figure_S6BE.svg",
-  device = "svg", path = plot_dir, figure_s6bg,
+  device = "svg", path = plot_dir, figure_s6be,
   width = 250, height = 120, units = "mm"
 )
 ```

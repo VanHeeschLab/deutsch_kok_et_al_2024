@@ -75,14 +75,16 @@ format_pval <- function(p_val) {
 
 ## Load required data and define directories and files
 ```{r}
-source("load_tables.R")
-source("load_peptideatlas_data.R")
-source("load_plot_aesthetics.R")
-tryCatch({
-  source("load_netmhcpan_data.R")
-}, error = function(e) {
-  message("❌ ", conditionMessage(e))
-})
+if (!exists("hla_orf_table")) source(here("code/load_tables.R"))
+if (!exists("hla_df")) source(here("code/load_peptideatlas_data.R"))
+if (!exists("remove_x")) source(here("code/load_plot_aesthetics.R"))
+if (!exists("pep_net_orf")) {
+  tryCatch({
+    source("load_netmhcpan_data.R")
+  }, error = function(e) {
+    message("❌ ", conditionMessage(e))
+  })
+}
 
 processed_dir <- here("processed")
 plot_dir <- file.path(processed_dir, "plots")

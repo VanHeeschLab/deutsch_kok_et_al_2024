@@ -37,7 +37,6 @@ read_netmhcpan <- function(net_path) {
 
 #-------------------------------------------------------------------------------
 # Define required file locations
-here::i_am("load_netmhcpan_data.R")
 processed_dir <- here("processed")
 
 # For running predictions yourself specify

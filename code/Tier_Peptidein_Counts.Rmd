@@ -15,8 +15,8 @@ suppressPackageStartupMessages({
 
 ## Load required data and define directories and files
 ```{r}
-source("load_tables.R")
-source("load_plot_aesthetics.R")
+if (!exists("hla_orf_table")) source(here("code/load_tables.R"))
+if (!exists("remove_x")) source(here("code/load_plot_aesthetics.R"))
 
 processed_dir <- here("processed")
 plot_dir <- file.path(processed_dir, "plots")

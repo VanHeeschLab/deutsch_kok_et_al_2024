@@ -11,8 +11,6 @@ library(here)
 
 #-------------------------------------------------------------------------------
 # Define required file locations
-here::i_am("load_peptideatlas_data.R")
-
 raw_dir <- here("raw")  # Directory where raw data is stored
 
 # File paths for peptide and mapping data

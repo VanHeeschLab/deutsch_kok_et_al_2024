@@ -34,8 +34,6 @@ make_biotype_levels <- function(df) {
 
 #-------------------------------------------------------------------------------
 # Define required file locations
-here::i_am("load_peptideatlas_data.R")
-
 raw_dir <- here("raw")
 
 # List of 7,264 ncORFs from doi: 10.1038/s41587-022-01369-0

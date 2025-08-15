@@ -24,9 +24,9 @@ suppressPackageStartupMessages({
 ```{r}
 utils::globalVariables(c("protein", "detected", "order_ids", "y_val",
                          "fill_group"))
-source("load_tables.R")
-source("load_peptideatlas_data.R")
-source("load_plot_aesthetics.R")
+if (!exists("hla_orf_table")) source(here("code/load_tables.R"))
+if (!exists("hla_df")) source(here("code/load_peptideatlas_data.R"))
+if (!exists("remove_x")) source(here("code/load_plot_aesthetics.R"))
 
 processed_dir <- here("processed")
 plot_dir <- file.path(processed_dir, "plots")
@@ -1181,7 +1181,6 @@ figure_s6e <-
 ```
 
 ## Figure S6F - Check HLA-II peptides
-
 ```{r}
 # Determine HLA class(es) per dataset
 dataset_class <- annotations %>%
