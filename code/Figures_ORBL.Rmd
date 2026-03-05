@@ -18,6 +18,7 @@ suppressPackageStartupMessages({
   library(gghalves)
   library(httr)
   library(ggpattern)
+  library(grid)
 })
 ```
 
