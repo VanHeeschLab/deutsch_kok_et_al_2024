@@ -1,0 +1,13 @@
+{
+    "title": "Deutsch Kok et al. analysis code",
+    "description": "This repository contains the code for most of the analyses and figures of the manuscript: High-quality peptide evidence for annotating non-canonical open reading frames as human proteins, Deutsch, Kok, Mudge et al., 2024",
+    "license": "MIT",
+    "version": "1.0.0",
+    "creators": [
+        {
+            "name": "Kok, Leron W.",
+            "affiliation": "Princess Máxima Center for Pediatric Oncology",
+            "orcid": "0009-0008-0841-2313"
+        }
+    ]
+}
