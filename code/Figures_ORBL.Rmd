@@ -46,7 +46,7 @@ orblq_placental_file <- file.path(raw_dir, "RiboSeqORFs.ORBLq.placental.tsv")
 orblq_primate_file <- file.path(raw_dir, "RiboSeqORFs.ORBLq.primate.tsv")
 
 # ORBLv and ORBLq data for ncORFs
-orbl_ncorf_file <- file.path(raw_dir, "Ribo-Seq_ORF_ORBL.2025-06-03.txt")
+orbl_ncorf_file <- file.path(raw_dir, "VanHeesch_EDtable11.xlsx")
 
 # PhyloCSF scores from Sandmann paper
 sandmann_file <- file.path(raw_dir, "sandmann_data.xlsx")
@@ -547,17 +547,15 @@ ggsave("figure_4A.svg",
 ## Load ORBL and Phylocsf data
 ```{r}
 # ORBL scores
-orbl_ncorfs <- read_delim(orbl_ncorf_file, delim = "\t") %>%
+orbl_ncorfs <- read_excel(orbl_ncorf_file, skip = 5, na = "NA") %>%
   mutate(
     BiotypeV42 = str_replace(BiotypeV42, "-", " ") %>%
       factor(orf_order),
     url = str_replace_all(CodAlignView, '=hyperlink\\("', "") %>%
-      str_replace('", "CodAlignView"\\)', "")
+      str_replace('", "CodAlignView"\\)', ""),
+    ORBLq = as.numeric(ORBLq),
+    ORBLq_primate = as.numeric(ORBLq_primate)
   )
-
-# PhyloCSF scores
-phylocsf_scores <- orf_sequences %>%
-  mutate(phylocsf_codon = phylocsf / nchar(protein))
 
 # Combine ORBL and PhyloCSF scores
 orbl_phylocsf <- orbl_ncorfs %>%
@@ -580,7 +578,7 @@ orbl_phylocsf <- orbl_ncorfs %>%
   mutate(
     fraction = row_number() / max(row_number()),
     is_90 = ORBLq > .9,
-    phylocsf_codon = phylocsf / (NumCodonsWithStop - 1)
+    phylocsf_codon = phylocsf / NumCodonsWithStop
   )
 ```
 
