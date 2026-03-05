@@ -40,11 +40,11 @@ raw_dir <- here("raw")
 orf_file <- file.path(raw_dir, "ncorf_list.xlsx")
 
 # Supplementary tables about detected peptides and ncORFs
-table_s2_file <- file.path(raw_dir, "20250801_VanHeesch_EDtable2.xlsx")
-table_s3_file <- file.path(raw_dir, "20250801_VanHeesch_EDtable3.xlsx")
-table_s6_file <- file.path(raw_dir, "20250801_VanHeesch_EDtable6.xlsx")
-table_s7_file <- file.path(raw_dir, "20250801_VanHeesch_EDtable7.xlsx")
-table_s8_file <- file.path(raw_dir, "20250801_VanHeesch_EDtable8.xlsx")
+table_s2_file <- file.path(raw_dir, "VanHeesch_EDtable2.xlsx")
+table_s3_file <- file.path(raw_dir, "VanHeesch_EDtable3.xlsx")
+table_s6_file <- file.path(raw_dir, "VanHeesch_EDtable6.xlsx")
+table_s7_file <- file.path(raw_dir, "VanHeesch_EDtable7.xlsx")
+table_s8_file <- file.path(raw_dir, "VanHeesch_EDtable8.xlsx")
 
 #-------------------------------------------------------------------------------
 # Load tables
