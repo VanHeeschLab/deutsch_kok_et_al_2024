@@ -575,6 +575,8 @@ kmer_df_nonc <- k_mers_nonc %>%
               mutate(kmer_detected = TRUE), c("kmer" = "peptide")) %>%
   left_join(pep_nonc_long %>%
               ungroup() %>%
+              semi_join(peptide_hla %>%
+                          filter(hla_class == "I"), "peptide") %>%
               distinct(protein_accession) %>%
               mutate(orf_detected = TRUE), "protein_accession") %>%
   replace_na(list(kmer_detected = FALSE, orf_detected = FALSE))
