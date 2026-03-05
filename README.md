@@ -1,4 +1,4 @@
-# Deutsch, Kok, Mudge et al. 2024
+# Deutsch, Kok, Mudge, Valls, Jungreis et al. 2024
 
 This repository contains the code for most of the analyses and figures of the manuscript: High-quality peptide evidence for annotating non-canonical open reading frames as human proteins, Deutsch, Kok, Mudge et al., 2024 ([link](https://www.biorxiv.org/content/10.1101/2024.09.09.612016v1))
 
@@ -34,9 +34,7 @@ List of canonical protein IDs from PeptideAtlas
 Mean FPKM expression of genes in GTEX (excluding testis)
 - GTEX_FPKMmean_expression.txt
 
-Statistics from PeptideAtlas on the human HLA (2023-11) and non-HLA (2023-06) builds
-- HLA2023-09_experiment_summary.xlsx
-- Non-HLA2023-09_experiment_summary.tsv
+
 
 R data object containing the canonical protein and ncORF sequences (alternative to Homo_sapiens.fasta from PeptideAtlas)
 - can_nonc_seq.RDS
@@ -58,16 +56,16 @@ Files containing analysis results about the usage of different proteases, search
 + 20250318_PXD010154_results.xlsx
 + 20250318_R2R_build_different_FDRs.xlsx
 
-ORBL results (will be uploaded upon publication):
+ORBL results:
 + MSA_Species.xlsx
-+ Ribo-Seq_ORF_ORBL.2025-06-03.txt
-+ RiboSeqORFs.ORBLq.placental.txt
-+ RiboSeqORFs.ORBLq.primate.tsv
 + RiboVsManeOrblv.placental.tsv
 + RiboVsManeOrblv.primate.tsv
 
 The following files are **not** provided but are publicly available:
+- Statistics from PeptideAtlas on the human [HLA (2023-11)](https://db.systemsbiology.net/sbeams/cgi/PeptideAtlas/buildDetails?atlas_build_id=568) and [non-HLA (2023-06)](https://db.systemsbiology.net/sbeams/cgi/PeptideAtlas/buildDetails?atlas_build_id=563) builds (downloadable from PeptideAtlas)
+    - HLA2023-09_experiment_summary.tsv
+    - Non-HLA2023-09_experiment_summary.tsv
 - Homo_sapiens.GRCh38.102.gtf
-- Extended data tables 2, 3, 5, 6, 7, 8, 12, 14 (available upon publication)
+- Extended data tables 2, 3, 5, 6, 7, 8, 11, 12, 14 (available upon publication)
 
 At several instances, netMHCpan predictions were performed, for which the script run_netmchpan.sh is used. This script uses a netMHCpan docker container. Prediction results are also provided as RDS files in the raw directory. Only the predictions for all possible length 9 ncORF peptides could not be uploaded due to the size limit. However, these predictions can be performed with the provided scripts.
