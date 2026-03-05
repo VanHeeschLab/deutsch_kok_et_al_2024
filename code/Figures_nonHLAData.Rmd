@@ -1,9 +1,17 @@
+---
+title: "Script to create figures related to the non-HLA PeptideAtlas build"
+output: html_document
+author: "Leron Kok"
+---
+
 # Load libraries
 ```{r}
-library(tidyverse)
-library(here)
-library(patchwork)
-library(scales)
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(here)
+  library(patchwork)
+  library(scales)
+})
 ```
 # Load data
 ```{r}
