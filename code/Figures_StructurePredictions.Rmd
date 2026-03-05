@@ -72,7 +72,7 @@ create_structure_violin <- function(df, y_val, y_lab, y_lim = c(NA, NA),
       pink_col[2], pink_col[5]
     )) +
     geom_pwc(
-      label = "p.adj.signif",
+      label = "p.adj",
       method = "wilcox.test",
       p.adjust.method = "fdr",
       hide.ns = TRUE
