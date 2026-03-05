@@ -26,7 +26,7 @@ if (!exists("remove_x")) source(here("code/load_plot_aesthetics.R"))
 
 processed_dir <- here("processed")
 plot_dir <- file.path(processed_dir, "plots")
-struct_file <- file.path(raw_dir, "20250801_VanHeesch_EDtable14.xlsx")
+struct_file <- file.path(raw_dir, "VanHeesch_EDtable14.xlsx")
 
 # Load structure prediction data for each ncORF
 struct_df <- read_xlsx(struct_file, sheet = 1) %>%
