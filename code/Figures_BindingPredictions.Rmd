@@ -251,11 +251,11 @@ figure_2ij <- figure_2i1 + figure_2i2 + figure_2j + plot_layout(nrow = 1)
 
 ggsave("Figure_2IJ.svg",
   device = "svg", path = plot_dir, figure_2ij,
-  width = 3152.30, height = 682.48, units = "px"
+  width = 2700, height = 525, units = "px"
 )
 ```
 
-## Figure 2H - Heatmap
+## Figure 2K - Heatmap
 ```{r}
 # Heatmap colors
 ht_colors <- colorRamp2(
@@ -547,8 +547,8 @@ ggsave("Figure_3E.svg",
 )
 ```
 
-# Figure S8 - Binding predictions
-## Figure S8AB - 9mers per hla-typing
+# Figure S6 - Binding predictions
+## Figure S6AB - 9mers per hla-typing
 ### Extract 9mers from non-canonical ORFs
 ```{r}
 k <- 9
@@ -630,7 +630,7 @@ if (file.exists(net_kmers_nonc_rds_file)) {
 }
 ```
 
-### Create figure S8A
+### Create figure S6A
 ```{r}
 ms_alleles <- hla_df %>%
   distinct(peptide, hla_typing, hla_type) %>%
@@ -667,7 +667,7 @@ p_label_min_rank_det <- grobTree(textGrob(min_rank_det_pval,
   gp = gpar(col = "black", fontsize = 7)
 ))
 
-figure_s8a <- ggplot(
+figure_s6a <- ggplot(
   ms_alleles,
   aes(kmer_hla_detected,
     y = min_rank,
@@ -722,7 +722,7 @@ p_label_perc_rank_orf <- grobTree(textGrob(perc_rank_orf_pval,
   just = c("center", "top"), gp = gpar(col = "black", fontsize = 7)
 ))
 
-figure_s8b <- ggplot(
+figure_s6b <- ggplot(
   nonc_kmer_all_allele_perc,
   aes(orf_detected, y = perc, fill = orf_detected)
 ) +
@@ -750,18 +750,18 @@ figure_s8b <- ggplot(
 
 ### Figure S8A-B - Combine
 ```{r}
-figure_s8ab <- figure_s8a + figure_s8b
+figure_s6ab <- figure_s6a + figure_s6b
 
-ggsave("Figure_S8AB.svg",
-  device = "svg", path = plot_dir, figure_s8ab,
+ggsave("Figure_S6AB.svg",
+  device = "svg", path = plot_dir, figure_s6ab,
   width = 1100, height = 1000, units = "px"
 )
 ```
 
-## Figure S8G - Ligand Atlas quality
+## Figure S6G - Ligand Atlas quality
 
 ```{r}
-figure_s8g <- ggplot(
+figure_s6g <- ggplot(
   peplen_plot_data %>%
     filter(dataset_id == "PXD019643") %>%
     arrange(orf_count),
@@ -792,13 +792,13 @@ figure_s8g <- ggplot(
     breaks = c(10, 12, 14)
   )
 
-ggsave("figure_S8G.svg",
-  device = "svg", path = plot_dir, figure_s8g,
+ggsave("figure_S6G.svg",
+  device = "svg", path = plot_dir, figure_s6g,
   width = 1237.205, height = 600, units = "px"
 )
 ```
 
-## Figure S8H - LigandAtlas - GTEX comparison
+## Figure S6H - LigandAtlas - GTEX comparison
 ```{r}
 ligand_atlas_genes <- pep_net_orf %>%
   ungroup() %>%
@@ -855,7 +855,7 @@ gtex_df <- gtex_data %>%
   arrange(ligand_tissue) %>%
   mutate(gtex_name = factor(gtex_name, levels = unique(gtex_name)))
 
-figure_s8h <- ggplot() +
+figure_s6h <- ggplot() +
   geom_jitter(gtex_df %>% filter(value <= 50),
     mapping = aes(gtex_name, value),
     stat = "identity", size = .01
@@ -873,14 +873,14 @@ figure_s8h <- ggplot() +
   scale_fill_manual(values = green_col[4]) +
   theme(axis.text.x = element_text(angle = 60, hjust = 1))
 
-ggsave("Figure_S8H.svg",
-  device = "svg", path = plot_dir, figure_s8h,
+ggsave("Figure_S6H.svg",
+  device = "svg", path = plot_dir, figure_s6h,
   width = 1300, height = 800, units = "px"
 )
 ```
 
-# Figure S10 - ORF examples
-## Figure S10A - nonHLA c11riboseqorf4
+# Figure S8 - ORF examples
+## Figure S8A - nonHLA c11riboseqorf4
 ```{r}
 b_w <- 0.7
 orf_id <- "CONTRIB_GENCODE_c11riboseqorf4"
@@ -907,7 +907,7 @@ nonhla_pep <- nonhla_peptide_table %>%
     y_max = y_order + 0.5 * b_w
   )
 
-figure_s10a <- ggplot() +
+figure_s8a <- ggplot() +
   geom_rect(nonhla_pep,
     mapping = aes(
       xmin = pep_start, xmax = pep_end,
@@ -926,13 +926,13 @@ figure_s10a <- ggplot() +
   scale_y_continuous(breaks = c()) +
   theme(axis.line.y = element_blank())
 
-ggsave("Figure_S10A.svg",
-  device = "svg", path = plot_dir, figure_s10a,
+ggsave("Figure_S8A.svg",
+  device = "svg", path = plot_dir, figure_s8a,
   width = 2200, height = 300, units = "px"
 )
 ```
 
-## Figure S10B - HLA c17norep146
+## Figure S8B - HLA c17norep146
 ### Create c17norep146 kmers
 ```{r}
 seq_17_146 <- can_nonc_seq %>%
@@ -984,7 +984,7 @@ if (file.exists(net_c17_146_rds_file)) {
 }
 ```
 
-### Create Figure S10B
+### Create Figure S8B
 ```{r}
 # Process alleles
 alleles_17_146 <- pep_nonc %>%
@@ -1167,8 +1167,8 @@ plot_17_146_shape <- ggplot(seq_17_146_contour) +
 
 figure_s10b <- plot_17_146_shape / plot_17_146_pred / plot_17_146_det
 
-ggsave("Figure_S10B.svg",
-  device = "svg", path = plot_dir, figure_s10b,
+ggsave("Figure_S8B.svg",
+  device = "svg", path = plot_dir, figure_s8b,
   width = 2200, height = 1000, units = "px"
 )
 ```

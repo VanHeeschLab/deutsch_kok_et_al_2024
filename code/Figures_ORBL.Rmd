@@ -725,9 +725,9 @@ figure_4f <- ggplot(
 
 figure_4ef <- figure_4e / figure_4f
 
-ggsave("figure_4BC.svg", figure_4bc,
+ggsave("figure_4EF.svg", figure_4ef,
   device = "svg", path = plot_dir,
-  width = 90, height = 100, units = "mm"
+  width = 45, height = 80, units = "mm"
 )
 ```
 
@@ -867,8 +867,8 @@ ggsave("figure_4I2.svg", c11norep1_heatmap[[2]],
 )
 ```
 
-# Figure S6
-## Figure S6A
+# Figure S7
+## Figure S7A
 ```{r}
 orbl_ref <- read_table(orbl_ref_file, col_names = "score") %>%
   arrange(score) %>%
@@ -877,7 +877,7 @@ orbl_ref <- read_table(orbl_ref_file, col_names = "score") %>%
     orblq = cum / max(cum)
   )
 
-figure_s6a <- ggplot(orbl_ref, aes(score, orblq)) +
+figure_s7a <- ggplot(orbl_ref, aes(score, orblq)) +
   geom_line() +
   scale_x_continuous(
     name = "ORBLv of matched ORFs",
@@ -894,21 +894,21 @@ figure_s6a <- ggplot(orbl_ref, aes(score, orblq)) +
   geom_hline(yintercept = .786, linetype = "dashed", color = green_col[1]) +
   geom_vline(xintercept = .572, , linetype = "dashed", color = blue_col[1])
 
-ggsave("Figure_S6A.svg",
-  device = "svg", path = plot_dir, figure_s6a,
+ggsave("Figure_S7A.svg",
+  device = "svg", path = plot_dir, figure_s7a,
   width = 60, height = 60, units = "mm"
 )
 ```
 
-## Figure S6B-E
+## Figure S7B-E
 ```{r}
-figure_s6b <- read_orbl_data(orblv_placental_file) %>%
+figure_s7b <- read_orbl_data(orblv_placental_file) %>%
   make_orbl_plot("Placental mammal ORBLv ncORF and MANE Select CDS",
     orbl_col[1:10],
     show_legend = TRUE
   )
 
-figure_s6c <- read_orbl_data(orblv_primate_file) %>%
+figure_s7c <- read_orbl_data(orblv_primate_file) %>%
   make_orbl_plot("Primate ORBLv ncORF and MANE Select CDS", orbl_col[1:10])
 
 orblq_primate_data <- orbl_ncorfs %>%
@@ -916,36 +916,36 @@ orblq_primate_data <- orbl_ncorfs %>%
   process_orblq_data()
 
 
-figure_s6d <- make_orbl_plot(
+figure_s7d <- make_orbl_plot(
   orblq_primate_data, "Primate ORBLq",
   orbl_col[3:8], orlq_highlight
 ) +
   geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
   geom_vline(xintercept = .9, linetype = "dashed", color = "black")
 
-figure_s6e <-
+figure_s7e <-
   create_orblq_barplot(
     orblq_primate_data,
     "Percentage ORFs with\nprimate ORBLq > 0.9"
   )
 
-figure_s6be <- figure_s6b + figure_s6c + figure_s6d +
-  figure_s6e + plot_layout(nrow = 2, guides = "collect")
+figure_s7be <- figure_s7b + figure_s7c + figure_s7d +
+  figure_s7e + plot_layout(nrow = 2, guides = "collect")
 
-ggsave("Figure_S6BE.svg",
-  device = "svg", path = plot_dir, figure_s6be,
+ggsave("Figure_S7BE.svg",
+  device = "svg", path = plot_dir, figure_s7be,
   width = 250, height = 120, units = "mm"
 )
 ```
 
-## Figure S6f
+## Figure S7F
 ```{r}
 # Determine number of detected and undetected ncORFs
 com_count <- hla_i_compare %>%
   dplyr::count(HLA_I_support) %>%
   deframe()
 
-figure_s6f <- hla_i_compare %>%
+figure_s7f <- hla_i_compare %>%
   group_by(HLA_I_support) %>%
   mutate(
     orf_count = formatC(n(), big.mark = ","),
@@ -976,8 +976,9 @@ figure_s6f <- hla_i_compare %>%
       )
   }
 
-ggsave("Figure_S6F.svg", figure_s6f,
+ggsave("Figure_S7F.svg", figure_s7f,
   device = "svg", path = plot_dir,
   width = 55, height = 55, units = "mm"
 )
 ```
+

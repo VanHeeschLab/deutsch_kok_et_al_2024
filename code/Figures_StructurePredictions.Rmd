@@ -101,15 +101,15 @@ create_structure_violin <- function(df, y_val, y_lab, y_lim = c(NA, NA),
 }
 ```
 
-# Figure S12 - Structure predictions
-## Figure S12a-d - Length and pLDDT
+# Figure S10 - Structure predictions
+## Figure S10a-d - Length and pLDDT
 ```{r}
-figure_s12a <- struct_df %>%
+figure_s10a <- struct_df %>%
   create_structure_violin("length", "ncORF length (aa)",
     y_breaks = c(16, 30, 100, 300, 1000), log = TRUE
   )
 
-figure_s12bd <- struct_df %>%
+figure_s10bd <- struct_df %>%
   select(plddt_esmfold, plddt_alphafold, plddt_omegafold, tier) %>%
   pivot_longer(-tier) %>%
   mutate(name = case_match(
@@ -123,17 +123,17 @@ figure_s12bd <- struct_df %>%
     create_structure_violin(df, "value", df$name[1], c(0, 200), seq(0, 100, 25))
   })
 
-figure_s12ad <- figure_s12a + figure_s12bd + plot_layout(nrow = 1)
+figure_s10ad <- figure_s10a + figure_s10bd + plot_layout(nrow = 1)
 
-ggsave("figure_S12ad.svg",
-  device = "svg", path = plot_dir, figure_s12ad,
+ggsave("figure_S10ad.svg",
+  device = "svg", path = plot_dir, figure_s10ad,
   width = 190, height = 90, units = "mm"
 )
 ```
 
-## Figure S12e-f - Shuffled sequences
+## Figure S10e-f - Shuffled sequences
 ```{r}
-figure_s12e <- struct_df %>%
+figure_s10e <- struct_df %>%
   select(plddt_alphafold) %>%
   filter(plddt_alphafold > 90) %>%
   mutate(cat = "ncORF") %>%
@@ -171,7 +171,7 @@ figure_s12e <- struct_df %>%
       scale_fill_manual(values = c(purple_col[1], grey_col[6]))
   }
 
-figure_s12f <- ggplot(struct_df, aes(plddt_alphafold, length)) +
+figure_s10f <- ggplot(struct_df, aes(plddt_alphafold, length)) +
   geom_point() +
   scale_x_continuous("pLDDT AlphaFold 3") +
   scale_y_log10("ncORF length (aa)") +
@@ -186,7 +186,7 @@ figure_s12f <- ggplot(struct_df, aes(plddt_alphafold, length)) +
     gp = gpar(fontsize = 7)
   )))
 
-figure_s12g <- alpha_reshuffle %>%
+figure_s10g <- alpha_reshuffle %>%
   group_by(original_orf_id) %>%
   summarise(
     `pLDDT > 80` = sum(plddt_alphafold > 80),
@@ -213,18 +213,18 @@ figure_s12g <- alpha_reshuffle %>%
     name = "Number of\nshuffled ncORF\nsequences"
   )
 
-figure_s12eg <- figure_s12e + figure_s12f + figure_s12g +
+figure_s10eg <- figure_s10e + figure_s10f + figure_s10g +
   plot_layout(nrow = 1, widths = c(1, 2, 1))
 
-ggsave("figure_S12eg.svg",
-  device = "svg", path = plot_dir, figure_s12eg,
+ggsave("figure_S10eg.svg",
+  device = "svg", path = plot_dir, figure_s10eg,
   width = 220, height = 60, units = "mm"
 )
 ```
 
-## Figure S12h-j - Shuffled sequences and ELM
+## Figure S10h-j - Shuffled sequences and ELM
 ```{r}
-figure_s12h <- struct_df %>%
+figure_s10h <- struct_df %>%
   select(plddt_alphafold, orf_id) %>%
   filter(plddt_alphafold > 90) %>%
   mutate(cat = "ncORF") %>%
@@ -267,21 +267,21 @@ figure_s12h <- struct_df %>%
       )
   }
 
-figure_s12i <- create_structure_violin(
+figure_s10i <- create_structure_violin(
   struct_df, "disorder_average_alphafold_dssp",
   "Proportion of disordered residues (dssp)", c(0, 1.75), seq(0, 1, .25)
 )
 
-figure_s12j <- create_structure_violin(
+figure_s10j <- create_structure_violin(
   struct_df, "cov_disorder_elm",
   "Proportion of residues covered\nby disordered ELMs", c(0, 1.75),
   seq(0, 1, .25)
 )
 
-figure_s12hj <- figure_s12h + figure_s12i + figure_s12j
+figure_s10hj <- figure_s10h + figure_s10i + figure_s10j
 
-ggsave("figure_S12hj.svg",
-  device = "svg", path = plot_dir, figure_s12hj,
+ggsave("figure_S10hj.svg",
+  device = "svg", path = plot_dir, figure_s10hj,
   width = 190, height = 110, units = "mm"
 )
 ```
