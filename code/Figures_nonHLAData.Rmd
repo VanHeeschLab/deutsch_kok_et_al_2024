@@ -25,7 +25,7 @@ engine_protease_compare_file <-
   file.path(raw_dir, "20250318_PXD010154_results.xlsx")
 fdr_compare_file <-
   file.path(raw_dir, "20250318_R2R_build_different_FDRs.xlsx")
-ubiquitination_file <- file.path(raw_dir, "20250801_VanHeesch_EDtable5.xlsx")
+ubiquitination_file <- file.path(raw_dir, "VanHeesch_EDtable5.xlsx")
 ```
 
 # Figure 2 - nonHLA data filtering
@@ -383,6 +383,6 @@ figure_s2ag <- (figure_s2a | figure_s2b) / (figure_s2c | figure_s2d) /
 
 ggsave("figure_S2AG.svg",
   device = "svg", path = plot_dir, figure_s2ag,
-  width = 240, height = 180, units = "mm"
+  width = 240, height = 135, units = "mm"
 )
 ```
