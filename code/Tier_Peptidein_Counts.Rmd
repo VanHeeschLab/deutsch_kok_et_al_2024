@@ -22,7 +22,7 @@ processed_dir <- here("processed")
 plot_dir <- file.path(processed_dir, "plots")
 
 # Peptidein annotation file
-table_s12_file <- file.path(raw_dir, "20250801_VanHeesch_EDtable12.xlsx")
+table_s12_file <- file.path(raw_dir, "VanHeesch_EDtable12.xlsx")
 ```
 
 # Figure 5 - Tiers and peptideins
