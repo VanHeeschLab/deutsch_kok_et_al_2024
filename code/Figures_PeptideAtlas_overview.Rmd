@@ -1,0 +1,130 @@
+---
+title: "Script to create overview of PeptideAtlas peptide and protein counts"
+output: html_document
+author: "Leron Kok"
+---
+
+# Pre-processing
+## Declare libraries
+```{r}
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(here)
+  library(grid)
+  library(patchwork)
+  library(scales)
+})
+```
+
+## Load required data and define directories and files
+```{r}
+if (!exists("remove_x")) source(here("code/load_plot_aesthetics.R"))
+
+raw_dir <- here("raw")
+processed_dir <- here("processed")
+plot_dir <- file.path(processed_dir, "plots")
+
+# Peptide Atlas build statistics files
+atlas_stats_file <- file.path(raw_dir, "HLA2023-11_experiment_summary.tsv")
+atlas_stats_nonhla_file <- 
+  file.path(raw_dir, "Non-HLA2023-09_experiment_summary.tsv")
+```
+
+## Declare functions
+```{r}
+get_atlas_stats <- function(stat_df) {
+  # Function to read PeptideAtlas stats file (as data.frame) and determine
+  #  the number of cumulative peptides and proteins detected
+  colnames(stat_df) <- colnames(stat_df) %>% str_replace_all(" |'", ".") %>% 
+    str_replace_all("X[.]Spectra", "%Spectra")
+  atlas_stats <- stat_df %>% 
+    mutate(cum_pep = cumsum(Added.Peptides),
+           spectra_searched = cumsum(Spectra.ID.d),
+           cum_pep_dis = Distinct.Peptides,
+           cum_pro = cumsum(Added.Canonical.Proteins),
+           cum_pro_dis = Distinct.Canonical.Proteins,
+           count = 2) %>% 
+    uncount(count) %>% 
+    add_row(spectra_searched = 0, .before = 1) %>% 
+    mutate(cum_pep = lead(cum_pep),
+           cum_pep_dis = lead(cum_pep_dis),
+           cum_pro = lead(cum_pro),
+           cum_pro_dis = lead(cum_pro_dis)) %>% 
+    filter(!is.na(cum_pep)) %>% 
+    select(spectra_searched, cum_pep, cum_pep_dis, cum_pro, cum_pro_dis) %>% 
+    pivot_longer(c(c(cum_pep, cum_pep_dis), c(cum_pro, cum_pro_dis))) %>% 
+    mutate(name = factor(name, levels = c("cum_pep", "cum_pep_dis", 
+                                          "cum_pro", "cum_pro_dis")))
+  return(atlas_stats)
+}
+
+create_atlas_plot <- function(plot_data, y_name, y_breaks,
+                              x_breaks = 0, y_lim = NA) {
+  # Function to create the PeptideAtlas peptide/protein count plots
+  count_label <- paste0(format(max(plot_data$value), big.mark = ","), 
+                               " ", str_extract(y_name, "\\w+$"))
+  c_label <- grobTree(textGrob(count_label, x=0.5,  y=1, just = c("center", "top"),
+      gp=gpar(col="black", fontsize=9)))
+  atlas_plot <- ggplot() +
+    geom_ribbon(data = plot_data, 
+                aes(x = spectra_searched, ymin = 0, ymax = value, 
+                    group = name, fill = name), show.legend = F) +
+    scale_fill_manual(values = atlas_color) +
+    scale_x_continuous(name = "Cumulative number of MS/MS spectra identified",
+                       breaks = x_breaks, 
+                       labels = label_number(scale_cut = cut_short_scale()),
+                       expand = c(0,0)) +
+    scale_y_continuous(name = y_name, breaks = y_breaks, 
+                       labels = label_number(scale_cut = cut_short_scale()),
+                       expand = c(0,0), limits = c(0, y_lim)) +
+    annotation_custom(c_label)
+  return(atlas_plot)
+}
+```
+
+# Figure S1 - Atlas statistics numbers
+```{r}
+atlas_stats_hla <- read_delim(atlas_stats_file, delim = "\t") %>% 
+  get_atlas_stats() 
+atlas_stats_nonhla <- read_delim(atlas_stats_nonhla_file, delim = "\t") %>% 
+  get_atlas_stats() 
+
+atlas_color <- c(blue_col[1], grey_col[6])
+
+max_pro <- max(atlas_stats_hla %>% filter(str_starts(name, "cum_pro")) %>% 
+                 pull(value) %>% max(),
+               atlas_stats_nonhla %>% filter(str_starts(name, "cum_pro")) %>% 
+                 pull(value) %>% max())
+
+p_hla_pep <- 
+  create_atlas_plot(atlas_stats_hla %>% filter(str_starts(name, "cum_pep")),
+                    "Number of distinct peptides", 
+                    seq(0, 8e5, 2e5),
+                    seq(0, 25e6, 5e6)) +
+  remove_x
+
+p_nonhla_pep <- 
+  create_atlas_plot(atlas_stats_nonhla %>% filter(str_starts(name, "cum_pep")),
+                    "Number of distinct peptides", 
+                    c(0, 1e6, 2e6),
+                    seq(0, 5e8, 1e8)) +
+  remove_x
+
+p_hla_pro <- 
+  create_atlas_plot(atlas_stats_hla %>% filter(str_starts(name, "cum_pro")),
+                    "Number of distinct proteins", 
+                    seq(0, 15e3, 5e3), 
+                    seq(0, 25e6, 5e6), max_pro)
+
+p_nonhla_pro <- 
+  create_atlas_plot(atlas_stats_nonhla %>% filter(str_starts(name, "cum_pro")),
+                    "Number of distinct proteins", 
+                    seq(0, 15e3, 5e3), 
+                    seq(0, 5e8, 1e8),
+                    max_pro)
+
+figure_S1 <- (p_nonhla_pep + p_hla_pep) / (p_nonhla_pro + p_hla_pro)
+
+ggsave("figure_S1.svg", device = "svg", path = plot_dir, figure_S1, 
+       width = 180, height = 100, units = "mm")
+```			
